@@ -1,0 +1,55 @@
+# 段階1「1ビーム・1点観測」FMLOシミュレーションの設定
+# 全パラメータの唯一の定義場所。スクリプト側に既定値は持たせない。
+# 「要確認」と書いた値は根拠が未確認の仮の値(README の一覧を参照)。
+
+seed: 20261005              # 乱数シード(全成分の乱数をここから派生させる)
+
+source:
+  sigma_arcsec: 50.0        # 天体の空間サイズ。ガウシアンの σ [arcsec](FWHM ではない)
+  line_fwhm_kms: 50.0       # 輝線幅。速度の FWHM [km/s]
+  center_freq_ghz: 150.0    # 輝線の中心周波数 [GHz](125–163 GHz の範囲)
+  peak_k: 1.0               # ピーク強度 [K] 要確認(仮の値)
+  center_ra_arcsec: 0.0     # 天体中心の RA オフセット [arcsec]
+  center_dec_arcsec: 0.0    # 天体中心の Dec オフセット [arcsec]
+
+cube:
+  half_extent_arcsec: 200.0 # マップの半幅 [arcsec](±4σ)
+  pixel_arcsec: 10.0        # ピクセルサイズ [arcsec]
+  margin_ch: 50             # 変調幅の外側に取る周波数方向の余白 [ch]
+
+pointing:
+  ra_arcsec: null           # スペクトルを取り出す位置 [arcsec]。null なら天体中心
+  dec_arcsec: null
+
+spectrometer:
+  n_channels: 4096          # チャンネル数 要確認(SAM45 を想定)
+  channel_width_mhz: 0.48828125  # チャンネル幅 [MHz] = 2000/4096 要確認(SAM45 を想定)
+  center_freq_ghz: 150.0    # 変調なしのときの帯域中心の空の周波数 [GHz]
+
+modulation:
+  pattern: zigzag           # zigzag または random
+  dt_s: 0.1                 # 変調(=サンプリング)の時間間隔 [s]
+  half_width_ch: 150        # 変調の半幅 [ch]。シフト量は ±half_width_ch 要確認(仮の値)
+  zigzag_step_ch: 10        # ジグザグの1サンプルあたりのシフト量 [ch] 要確認(仮の値)
+                            # 周期 = 4 * half_width_ch / zigzag_step_ch サンプル
+
+observation:
+  duration_s: 60.0          # 観測時間 [s] 要確認(仮の値)
+
+noise:
+  thermal:
+    enabled: true
+    tsys_k: 200.0           # システム雑音温度 [K]
+  atmosphere:
+    enabled: true
+    alpha: 1.0              # 時間方向パワースペクトル f^(-alpha) の指数
+    rms_k: 1.0              # 時間変動の標準偏差 [K] 要確認(仮の値)
+    offset_k: 0.0           # 時間変動しない定数オフセット [K]
+    slope_frac: 0.1         # 周波数方向の傾き。変調なしの帯域の両端で ±slope_frac 要確認(仮の値)
+
+removal:
+  n_components: 1           # PCA で除去する成分数(0 なら除去しない)
+  mean_mode: none           # none(平均を引かない)または channel_mean(各チャンネルの時間平均を引く)
+
+evaluation:
+  line_free_n_fwhm: 2.0     # 輝線中心から ±(この値 × FWHM) の外側を「輝線のない領域」とする
