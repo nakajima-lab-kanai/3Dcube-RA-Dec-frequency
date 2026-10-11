@@ -61,23 +61,47 @@ def apply_fmlo_modulation(signal, shift_pattern):
         modulated[t, :] = np.roll(signal[t, :], shift)
     return modulated
 
-def generate_correlated_noise(n_time, n_channels):
+def generate_shift_pattern(n_time, modulation_width=10, modulation_step=2, pattern='zigzag'):
     """
-    大気や装置由来の時間変動する相関ノイズ (1/f ノイズのような挙動を模擬)
+    FMLO法の周波数変調シフトパターンを生成
     """
-    # チャンネル間で相関のあるベースライン
-    # 時間変化するスロープやオフセット
+    w = int(modulation_width)
+    s = int(modulation_step)
+    if w <= 0:
+        return np.zeros(n_time, dtype=int)
+    if pattern == 'zigzag':
+        if s <= 0:
+            raise ValueError("modulation_step must be >= 1")
+        pos = np.arange(n_time) * s
+        return (w - np.abs((pos + w) % (4 * w) - 2 * w)).astype(int)
+    elif pattern == 'random':
+        return np.random.randint(-w, w + 1, size=n_time)
+    else:
+        raise ValueError(f"Unknown pattern: {pattern}")
+
+def generate_correlated_noise(n_time, n_channels, noise_type='laminar'):
+    """
+    大気や装置由来の時間変動する相関ノイズ
+    noise_type: 'laminar' (層流: 穏やかな低周波変動) または 'turbulent' (乱流: 高周波変動)
+    """
     t_array = np.linspace(0, 10, n_time)
     ch_array = np.linspace(-1, 1, n_channels)
     
     noise = np.zeros((n_time, n_channels))
-    # ゆっくりとした時間変動
-    time_var1 = np.sin(2 * np.pi * 0.1 * t_array) + 2.0
-    time_var2 = np.cos(2 * np.pi * 0.05 * t_array)
-    
-    for t in range(n_time):
-        # チャンネル方向に相関を持つパターン (例えば傾きや二次関数)
-        noise[t, :] = time_var1[t] * 100.0 + time_var2[t] * 20.0 * ch_array + np.random.normal(0, 5, n_channels)
+    if noise_type == 'laminar':
+        # 層流モデル: 穏やかな低周波変動
+        time_var1 = np.sin(2 * np.pi * 0.05 * t_array) + 2.0
+        time_var2 = 0.5 * (t_array / 10.0)
+        for t in range(n_time):
+            noise[t, :] = time_var1[t] * 50.0 + time_var2[t] * 10.0 * ch_array + np.random.normal(0, 2, n_channels)
+    elif noise_type == 'turbulent':
+        # 乱流モデル: 従来の変動
+        time_var1 = np.sin(2 * np.pi * 0.1 * t_array) + 2.0
+        time_var2 = np.cos(2 * np.pi * 0.05 * t_array)
+        for t in range(n_time):
+            noise[t, :] = time_var1[t] * 100.0 + time_var2[t] * 20.0 * ch_array + np.random.normal(0, 5, n_channels)
+    else:
+        raise ValueError(f"Unknown noise_type: {noise_type}")
         
     return noise
 
@@ -101,7 +125,7 @@ def grid_data(ra, dec, values, extent, grid_size=50):
     grid_z = griddata((ra, dec), values, (grid_ra, grid_dec), method='linear')
     return grid_ra, grid_dec, grid_z
 
-def main():
+def main(modulation_width=10, modulation_step=2, noise_type='laminar'):
     # パラメータ設定
     extent = [-2, 2, -2, 2] # RA, Decの範囲 (相対座標)
     n_lines = 20
@@ -119,17 +143,14 @@ def main():
     signal_y = generate_sky_model(ra_y, dec_y, n_channels, center_ch)
     
     # 3. FMLO変調パターンの生成 (ジグザグ)
-    # -10 から 10 チャンネルのシフトを繰り返す
-    modulation_period = 10
-    shift_pattern = (np.arange(n_time) % modulation_period) - (modulation_period // 2)
-    shift_pattern = shift_pattern * 2 # 振幅
+    shift_pattern = generate_shift_pattern(n_time, modulation_width=modulation_width, modulation_step=modulation_step)
     
     mod_signal_x = apply_fmlo_modulation(signal_x, shift_pattern)
     mod_signal_y = apply_fmlo_modulation(signal_y, shift_pattern)
     
     # 4. 相関ノイズ(大気など)の付加
-    noise_x = generate_correlated_noise(n_time, n_channels)
-    noise_y = generate_correlated_noise(n_time, n_channels)
+    noise_x = generate_correlated_noise(n_time, n_channels, noise_type=noise_type)
+    noise_y = generate_correlated_noise(n_time, n_channels, noise_type=noise_type)
     
     obs_x = mod_signal_x + noise_x
     obs_y = mod_signal_y + noise_y

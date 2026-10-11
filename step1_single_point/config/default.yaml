@@ -42,7 +42,8 @@ noise:
     tsys_k: 200.0           # システム雑音温度 [K]
   atmosphere:
     enabled: true
-    alpha: 1.0              # 時間方向パワースペクトル f^(-alpha) の指数
+    model: laminar          # laminar(層流: 穏やかな低周波変動) または colored/turbulent(乱流: f^-alpha 有色雑音)
+    alpha: 1.0              # 時間方向パワースペクトル f^(-alpha) の指数(colored/turbulent の場合)
     rms_k: 1.0              # 時間変動の標準偏差 [K] 要確認(仮の値)
     offset_k: 0.0           # 時間変動しない定数オフセット [K]
     slope_frac: 0.1         # 周波数方向の傾き。変調なしの帯域の両端で ±slope_frac 要確認(仮の値)

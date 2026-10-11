@@ -22,24 +22,28 @@ nakajima'slab 3Dcube coding task.
 観測対象となる天体の真のシグナル（模擬データ）を生成する関数です。
 - **機能**: 3次元データキューブは使わず、指定された `ra`, `dec` のタイムストリーム上で計算を行います。空間的にはガウシアンボール（2次元ガウス分布、例：50 arcsec幅）、スペクトル（周波数）方向にもガウス分布（例：50 km/s幅に相当するチャンネル幅）を持つ輝線天体をモデル化します。
 
-### 3. `apply_fmlo_modulation(signal, shift_pattern)`
+### 3. `generate_shift_pattern(n_time, modulation_width=15, modulation_step=3, pattern='zigzag')`
+FMLO法の周波数変調シフトパターンを生成する関数です。
+- **機能**: 変調幅（`modulation_width`）および変調ステップ（`modulation_step`）をパラメータとして指定し、三角波（zigzag）または一様乱数（random）の周波数シフトパターン（タイムストリーム）を生成します。
+
+### 4. `apply_fmlo_modulation(signal, shift_pattern)`
 FMLO法の中核である「周波数変調」をシミュレートする関数です。
 - **機能**: 観測中（タイムステップごと）にLO周波数を高速に変化させる操作を、周波数チャンネルの循環シフト（`np.roll`）として実装しています。これにより、天体の輝線成分が時間に対して非相関な動きを持つようになります。
 
-### 4. `generate_noise(n_time, n_channels)`
+### 5. `generate_noise(n_time, n_channels, noise_type='laminar')`
 観測に乗ってくる各種ノイズを生成する関数です。
-- **機能**: 大気放射や装置のベースライン変動などに起因する「時間・チャンネル方向に強い相関を持つ低周波ノイズ（相関ノイズ）」と、ランダムな「熱雑音（ホワイトノイズ）」を合成して返します。
+- **機能**: 大気放射や装置のベースライン変動などに起因する相関ノイズと、ランダムな「熱雑音（ホワイトノイズ）」を合成して返します。大気ノイズモデルとして `noise_type='laminar'`（層流: 穏やかな低周波変動・ドリフト）および `noise_type='turbulent'`（乱流: 高周波変動）を選択可能です。
 
-### 5. `fmlo_demodulate(data, shift_pattern)`
+### 6. `fmlo_demodulate(data, shift_pattern)`
 データ解析の段階で行う「復調（逆シフト）」処理を担う関数です。
 - **機能**: `apply_fmlo_modulation` で与えたシフト量とは逆のシフト（`-shift`）を各タイムステップで適用します。これにより、FMLOで散らされた天体の輝線信号を本来のチャンネル位置に揃え（積分可能な状態にし）ます。
 
-### 6. `grid_data(ra, dec, values, extent, grid_size)`
+### 7. `grid_data(ra, dec, values, extent, grid_size)`
 タイムストリームデータを2次元画像（マップ）に再構成する関数です。
 - **機能**: 不規則に並ぶスキャン軌跡上のデータ（`ra`, `dec`, `values`）を、`scipy.interpolate.griddata` を用いて等間隔な2次元グリッド上に内挿（グリッディング）し、積分強度マップを作成します。
 
-### 7. `main()`
-シミュレーションから解析までのパイプライン全体を実行するメイン関数です。以下の手順を制御します。
+### 8. `main(modulation_width=15, modulation_step=3, noise_type='laminar', output_path='nobeyama_fmlo_simulation.png')`
+シミュレーションから解析までのパイプライン全体を実行するメイン関数です。コマンドライン引数（`--mod-width`, `--mod-step`, `--noise-type`）からもパラメータを指定可能です。以下の手順を制御します。
 1. **スキャン軌跡の生成**（x-scan, y-scan）
 2. **天体シグナルの生成**
 3. **FMLO変調の適用**

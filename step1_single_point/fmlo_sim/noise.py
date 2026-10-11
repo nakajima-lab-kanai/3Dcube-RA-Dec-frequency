@@ -45,6 +45,28 @@ def colored_noise_timeseries(n_time, dt_s, alpha, rms, rng):
     return series * (rms / std)
 
 
+def laminar_noise_timeseries(n_time, dt_s, rms, rng=None):
+    """層流による大気雑音の時系列（穏やかな低周波変動・ドリフト）
+
+    乱流のような急激な高周波の揺らぎを持たず、観測時間全体にわたって滑らかに変化する
+    基底変動（線形ドリフト＋緩やかな長周期成分）を生成する。平均は 0、標準偏差は rms。
+    """
+    t = np.linspace(-1.0, 1.0, n_time)
+    if rng is not None:
+        c1 = rng.normal(0.0, 1.0)
+        c2 = rng.normal(0.0, 0.5)
+        phase = rng.uniform(0.0, 2 * np.pi)
+        series = c1 * t + c2 * (t**2 - 1.0 / 3.0) + 0.3 * np.cos(np.pi * t + phase)
+    else:
+        series = t + 0.5 * (t**2 - 1.0 / 3.0)
+    
+    series = series - series.mean()
+    std = series.std()
+    if std == 0:
+        return np.zeros(n_time)
+    return series * (rms / std)
+
+
 def atmosphere_shape(freq_ghz, center_freq_ghz, bandwidth_ghz, slope_frac):
     """大気成分の周波数方向の形(無次元)。定数 1 に緩やかな傾きを加えたもの
 

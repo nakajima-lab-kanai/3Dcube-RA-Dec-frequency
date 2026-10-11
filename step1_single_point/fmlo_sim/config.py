@@ -23,6 +23,9 @@ MEAN_MODES = ("none", "channel_mean")
 PATTERNS = ("zigzag", "random")
 
 
+ATMOSPHERE_MODELS = ("laminar", "colored", "turbulent")
+
+
 @dataclass
 class SourceConfig:
     sigma_arcsec: float
@@ -79,6 +82,7 @@ class AtmosphereConfig:
     rms_k: float
     offset_k: float
     slope_frac: float
+    model: str = "laminar"
 
 
 @dataclass
@@ -125,22 +129,30 @@ def _build(cls, data, path=""):
     if not isinstance(data, dict):
         raise ValueError(f"設定 '{path}' は辞書である必要があります")
     hints = get_type_hints(cls)
-    names = [f.name for f in dataclasses.fields(cls)]
+    fields = dataclasses.fields(cls)
+    names = [f.name for f in fields]
+    required = [f.name for f in fields if f.default is dataclasses.MISSING and f.default_factory is dataclasses.MISSING]
     unknown = set(data) - set(names)
-    missing = set(names) - set(data)
+    missing = set(required) - set(data)
     if unknown or missing:
         raise ValueError(
             f"設定 '{path or 'root'}' のキーが不正です: 未知={sorted(unknown)}, 不足={sorted(missing)}"
         )
     kwargs = {}
-    for name in names:
+    for f in fields:
+        name = f.name
         typ = hints[name]
-        value = data[name]
-        if dataclasses.is_dataclass(typ):
-            value = _build(typ, value, f"{path}.{name}".lstrip("."))
-        elif typ is float and value is not None:
-            value = float(value)
-        kwargs[name] = value
+        if name in data:
+            value = data[name]
+            if dataclasses.is_dataclass(typ):
+                value = _build(typ, value, f"{path}.{name}".lstrip("."))
+            elif typ is float and value is not None:
+                value = float(value)
+            kwargs[name] = value
+        elif f.default is not dataclasses.MISSING:
+            kwargs[name] = f.default
+        elif f.default_factory is not dataclasses.MISSING:
+            kwargs[name] = f.default_factory()
     return cls(**kwargs)
 
 
@@ -177,6 +189,8 @@ def validate(cfg: Config) -> None:
         raise ValueError(f"modulation.pattern は {PATTERNS} のいずれかです")
     if cfg.removal.mean_mode not in MEAN_MODES:
         raise ValueError(f"removal.mean_mode は {MEAN_MODES} のいずれかです")
+    if cfg.noise.atmosphere.model not in ATMOSPHERE_MODELS:
+        raise ValueError(f"noise.atmosphere.model は {ATMOSPHERE_MODELS} のいずれかです")
     if cfg.modulation.half_width_ch < 0 or cfg.cube.margin_ch < 0:
         raise ValueError("half_width_ch と margin_ch は 0 以上である必要があります")
     if cfg.modulation.zigzag_step_ch < 1:

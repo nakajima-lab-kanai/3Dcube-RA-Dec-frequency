@@ -16,9 +16,10 @@ python -m pytest                    # テスト
 python run_linewidth_sweep.py       # 輝線幅 50 / 100 / 200 km/s を一括実行
 ```
 
-設定は `config/default.yaml` を編集するか、`--set` で一時的に上書きします。
+設定は `config/default.yaml` を編集するか、`--half-width-ch` や `--zigzag-step-ch`、`--atmosphere-model`、または `--set` で一時的に上書きします。
 
 ```bash
+python run_step1.py --half-width-ch 150 --zigzag-step-ch 10 --atmosphere-model laminar
 python run_step1.py --outdir outputs/offset50 --set noise.atmosphere.offset_k=50 --set removal.n_components=2
 python run_step1.py --set modulation.pattern=random
 python run_linewidth_sweep.py --line-fwhm-kms 50 100 200 --half-width-ch 150 300 600 --zigzag-step-ch 20
@@ -150,7 +151,8 @@ python run_linewidth_sweep.py --line-fwhm-kms 50 100 200 --half-width-ch 150 300
 | `noise.thermal.enabled` | 熱雑音を入れるか | — | true | — |
 | `noise.thermal.tsys_k` | システム雑音温度 | K | 200 | 打ち合わせの指定 |
 | `noise.atmosphere.enabled` | 大気成分を入れるか | — | true | — |
-| `noise.atmosphere.alpha` | 時間方向パワースペクトル f^(-α) の指数 | — | 1.0 | 打ち合わせの例(1、2)。**実際の値は要確認** |
+| `noise.atmosphere.model` | 大気雑音モデル(`laminar`: 層流 / `turbulent` or `colored`: 乱流) | — | laminar | 穏やかな低周波変動 |
+| `noise.atmosphere.alpha` | 時間方向パワースペクトル f^(-α) の指数(colored の場合) | — | 1.0 | 打ち合わせの例(1、2)。**実際の値は要確認** |
 | `noise.atmosphere.rms_k` | 時間変動の標準偏差 | K | 1.0 | **要確認**(仮の値) |
 | `noise.atmosphere.offset_k` | 時間変動しない定数オフセット | K | 0 | **実際の大気の値は要確認** |
 | `noise.atmosphere.slope_frac` | 周波数方向の傾き(シフト 0 の帯域の両端で ± この値) | — | 0.1 | **要確認**(仮の値) |

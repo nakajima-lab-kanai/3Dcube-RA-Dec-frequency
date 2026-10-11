@@ -101,21 +101,62 @@ def fmlo_demodulate(data, shift_pattern):
         demodulated[t, :] = np.roll(data[t, :], -shift)
     return demodulated
 
-def generate_noise(n_time, n_channels):
+def generate_shift_pattern(n_time, modulation_width=15, modulation_step=3, pattern='zigzag'):
+    """
+    FMLO（周波数変調局部発振器）法の周波数シフトパターンを生成する関数
+    
+    Parameters:
+    - n_time: タイムステップ数
+    - modulation_width: 変調幅（変調の半幅・最大シフト量 [チャンネル]、例: 15）
+    - modulation_step: 1タイムステップあたりのシフト量 [チャンネル]、例: 3
+    - pattern: 変調パターン ('zigzag': 三角波, 'random': 一様乱数)
+    
+    Returns:
+    - shift_pattern: (n_time,) のシフト量配列 [チャンネル]
+    """
+    w = int(modulation_width)
+    s = int(modulation_step)
+    if w <= 0:
+        return np.zeros(n_time, dtype=int)
+    if pattern == 'zigzag':
+        if s <= 0:
+            raise ValueError("modulation_step は 1 以上である必要があります")
+        pos = np.arange(n_time) * s
+        # 0 から始まり ±w で折り返す三角波
+        return (w - np.abs((pos + w) % (4 * w) - 2 * w)).astype(int)
+    elif pattern == 'random':
+        return np.random.randint(-w, w + 1, size=n_time)
+    else:
+        raise ValueError(f"未知の変調パターンです: {pattern}")
+
+def generate_noise(n_time, n_channels, noise_type='laminar'):
     """
     大気や装置に由来する相関ノイズと、熱雑音（ホワイトノイズ）を生成する
+    
+    Parameters:
+    - n_time: タイムステップ数
+    - n_channels: 分光チャンネル数
+    - noise_type: 大気雑音モデル ('laminar': 層流による穏やかな低周波変動, 'turbulent': 乱流による高周波の変動)
     """
     # 1. 相関ノイズ（大気放射や装置のベースライン変動）
-    # 低周波成分が強い（1/fノイズ的）挙動を簡単なサイン波の合成で模擬
     t_array = np.linspace(0, 5, n_time)
     ch_array = np.linspace(-1, 1, n_channels)
     
     correlated_noise = np.zeros((n_time, n_channels))
-    time_fluctuation = 20.0 * np.sin(2 * np.pi * 0.5 * t_array) + 10.0 * np.cos(2 * np.pi * 1.5 * t_array) + 50.0
-    
-    for t in range(n_time):
-        # チャンネル方向にも傾きやうねりを持たせる
-        correlated_noise[t, :] = time_fluctuation[t] + 5.0 * np.sin(2 * np.pi * 1.0 * ch_array) * t_array[t]
+    if noise_type == 'laminar':
+        # 層流モデル: 穏やかな低周波変動（緩やかなドリフトとベースラインオフセット）
+        # 急激な渦・高周波振動を含まず、滑らかな時間変動と周波数スロープ
+        time_fluctuation = 50.0 + 5.0 * np.sin(2 * np.pi * 0.1 * t_array) + 3.0 * (t_array / 5.0)
+        for t in range(n_time):
+            correlated_noise[t, :] = time_fluctuation[t] + 3.0 * ch_array
+    elif noise_type == 'turbulent':
+        # 乱流モデル: 高周波成分を含む激しい時間・空間変動
+        time_fluctuation = 20.0 * np.sin(2 * np.pi * 0.5 * t_array) + 10.0 * np.cos(2 * np.pi * 1.5 * t_array) + 50.0
+        for t in range(n_time):
+            # チャンネル方向にも傾きやうねりを持たせる
+            correlated_noise[t, :] = time_fluctuation[t] + 5.0 * np.sin(2 * np.pi * 1.0 * ch_array) * t_array[t]
+    else:
+        raise ValueError(f"未知の noise_type です: {noise_type}")
         
     # 2. 熱雑音（ホワイトノイズ）
     thermal_noise = np.random.normal(0, 2.0, (n_time, n_channels))
@@ -131,7 +172,7 @@ def grid_data(ra, dec, values, extent, grid_size=60):
     grid_z = griddata((ra, dec), values, (grid_ra, grid_dec), method='cubic', fill_value=0)
     return grid_ra, grid_dec, grid_z
 
-def main():
+def main(modulation_width=15, modulation_step=3, noise_type='laminar', output_path='nobeyama_fmlo_simulation.png'):
     # --- 観測パラメータ設定 ---
     extent = [-150, 150, -150, 150] # マップ範囲 (arcsec)
     n_lines = 30                    # スキャン本数
@@ -140,6 +181,7 @@ def main():
     n_channels = 256                # 分光チャンネル数
     center_ch = 128                 # 輝線の中心チャンネル
     
+    print(f"パラメータ設定: 変調幅={modulation_width} ch, 変調ステップ={modulation_step} ch, 大気雑音モデル={noise_type}")
     print("1. スキャン軌跡の生成...")
     ra_x, dec_x = generate_scan_path('x', n_lines, points_per_line, extent)
     ra_y, dec_y = generate_scan_path('y', n_lines, points_per_line, extent)
@@ -149,17 +191,14 @@ def main():
     clean_signal_y = generate_sky_model(ra_y, dec_y, n_channels, center_ch)
     
     print("3. FMLO変調の適用...")
-    # 変調パターン：例えば観測中にチャンネルを±15シフトさせる三角波（ジグザグ）パターン
-    modulation_period = 20 # 20タイムステップで1周期
-    shift_pattern = np.abs((np.arange(n_time) % modulation_period) - (modulation_period / 2)) - (modulation_period / 4)
-    shift_pattern = shift_pattern * 3.0 # 振幅調整
+    shift_pattern = generate_shift_pattern(n_time, modulation_width=modulation_width, modulation_step=modulation_step)
     
     mod_signal_x = apply_fmlo_modulation(clean_signal_x, shift_pattern)
     mod_signal_y = apply_fmlo_modulation(clean_signal_y, shift_pattern)
     
-    print("4. 大気相関ノイズおよび熱雑音の付加...")
-    obs_x = mod_signal_x + generate_noise(n_time, n_channels)
-    obs_y = mod_signal_y + generate_noise(n_time, n_channels)
+    print(f"4. 大気相関ノイズ（{noise_type}）および熱雑音の付加...")
+    obs_x = mod_signal_x + generate_noise(n_time, n_channels, noise_type=noise_type)
+    obs_y = mod_signal_y + generate_noise(n_time, n_channels, noise_type=noise_type)
     
     print("5. データ解析（DE:MIST / PCAによる相関ノイズ除去）...")
     # 主成分分析(PCA)を用いて、時間・チャンネル間で強い相関を持つ成分（大気ノイズなど）を抽出
@@ -202,13 +241,13 @@ def main():
     vmin, vmax = np.nanmin(basket_map), np.nanmax(basket_map)
     
     im1 = axs[0].imshow(map_x.T, origin='lower', extent=extent, cmap='magma', vmin=vmin, vmax=vmax)
-    axs[0].set_title('x-scan Map (RA Scanning)')
+    axs[0].set_title(f'x-scan Map (RA Scanning)\n[Mod width: ±{modulation_width}ch, step: {modulation_step}ch]')
     axs[0].set_xlabel('Relative RA (arcsec)')
     axs[0].set_ylabel('Relative Dec (arcsec)')
     fig.colorbar(im1, ax=axs[0], label='Integrated Intensity')
     
     im2 = axs[1].imshow(map_y.T, origin='lower', extent=extent, cmap='magma', vmin=vmin, vmax=vmax)
-    axs[1].set_title('y-scan Map (Dec Scanning)')
+    axs[1].set_title(f'y-scan Map (Dec Scanning)\n[Noise: {noise_type}]')
     axs[1].set_xlabel('Relative RA (arcsec)')
     axs[1].set_ylabel('Relative Dec (arcsec)')
     fig.colorbar(im2, ax=axs[1], label='Integrated Intensity')
@@ -220,8 +259,20 @@ def main():
     fig.colorbar(im3, ax=axs[2], label='Integrated Intensity')
     
     plt.tight_layout()
-    plt.savefig('nobeyama_fmlo_simulation.png', dpi=150)
-    print("完了しました。画像は 'nobeyama_fmlo_simulation.png' として保存されました。")
+    plt.savefig(output_path, dpi=150)
+    print(f"完了しました。画像は '{output_path}' として保存されました。")
 
 if __name__ == '__main__':
-    main()
+    import argparse
+    parser = argparse.ArgumentParser(description="野辺山45m望遠鏡 FMLO シミュレーション")
+    parser.add_argument("--mod-width", "--modulation-width", dest="mod_width", type=int, default=15,
+                        help="変調幅（最大シフト量 [ch]、既定値: 15）")
+    parser.add_argument("--mod-step", "--modulation-step", dest="mod_step", type=int, default=3,
+                        help="変調ステップ（1ステップあたりのシフト量 [ch]、既定値: 3）")
+    parser.add_argument("--noise-type", choices=['laminar', 'turbulent'], default='laminar',
+                        help="大気雑音モデル ('laminar': 層流, 'turbulent': 乱流、既定値: laminar)")
+    parser.add_argument("--output", default='nobeyama_fmlo_simulation.png',
+                        help="出力画像ファイルパス (既定値: nobeyama_fmlo_simulation.png)")
+    args = parser.parse_args()
+    main(modulation_width=args.mod_width, modulation_step=args.mod_step,
+         noise_type=args.noise_type, output_path=args.output)

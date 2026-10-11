@@ -38,6 +38,15 @@ def test_colored_noise_rms_and_mean():
     assert abs(x.mean()) < 1e-12
 
 
+def test_laminar_noise_rms_and_mean():
+    x = noise.laminar_noise_timeseries(600, 0.1, 2.5, np.random.default_rng(3))
+    assert x.std() == pytest.approx(2.5)
+    assert abs(x.mean()) < 1e-12
+    # 層流（滑らかな変動）のため隣接サンプルの相関が極めて高い
+    diff = np.diff(x)
+    assert diff.std() < 0.1 * x.std()
+
+
 def test_atmosphere_is_fixed_in_sky_frequency():
     """大気の周波数方向の形は空の周波数に固定され、窓と一緒に切り出される"""
     n_ch, start0 = 32, 5

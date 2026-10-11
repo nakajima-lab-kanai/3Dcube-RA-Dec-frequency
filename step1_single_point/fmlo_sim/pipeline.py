@@ -71,7 +71,10 @@ def simulate(cfg: Config) -> Simulation:
         ))
     if cfg.noise.atmosphere.enabled:
         atm = cfg.noise.atmosphere
-        series = noise.colored_noise_timeseries(n_time, dt, atm.alpha, atm.rms_k, rngs["atmosphere"])
+        if getattr(atm, "model", "laminar") in ("colored", "turbulent"):
+            series = noise.colored_noise_timeseries(n_time, dt, atm.alpha, atm.rms_k, rngs["atmosphere"])
+        else:
+            series = noise.laminar_noise_timeseries(n_time, dt, atm.rms_k, rngs["atmosphere"])
         shape = noise.atmosphere_shape(
             grid.freq_ghz, grid.center_freq_ghz, grid.bandwidth_ghz, atm.slope_frac
         )

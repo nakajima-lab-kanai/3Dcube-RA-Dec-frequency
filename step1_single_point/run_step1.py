@@ -99,12 +99,27 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--config", default=None, help="設定ファイル(既定: config/default.yaml)")
     parser.add_argument("--outdir", default=str(HERE / "outputs" / "step1"), help="出力先ディレクトリ")
+    parser.add_argument("--half-width-ch", "--mod-width", dest="half_width_ch", type=int, default=None,
+                        help="変調の半幅 [ch](既定値: configの値)")
+    parser.add_argument("--zigzag-step-ch", "--mod-step", dest="zigzag_step_ch", type=int, default=None,
+                        help="ジグザグの1サンプルあたりのシフト量 [ch](既定値: configの値)")
+    parser.add_argument("--atmosphere-model", "--noise-type", dest="atmosphere_model",
+                        choices=["laminar", "turbulent", "colored"], default=None,
+                        help="大気雑音モデル ('laminar': 層流, 'turbulent'/'colored': 乱流、既定値: configの値)")
     parser.add_argument("--set", action="append", metavar="KEY=VALUE",
                         help="設定の上書き(例: --set removal.n_components=2)。複数指定可")
     parser.add_argument("--no-plots", action="store_true", help="図を出力しない")
     args = parser.parse_args()
 
-    cfg = load_config(args.config, parse_set_args(args.set))
+    overrides = parse_set_args(args.set)
+    if args.half_width_ch is not None:
+        overrides["modulation.half_width_ch"] = args.half_width_ch
+    if args.zigzag_step_ch is not None:
+        overrides["modulation.zigzag_step_ch"] = args.zigzag_step_ch
+    if args.atmosphere_model is not None:
+        overrides["noise.atmosphere.model"] = args.atmosphere_model
+
+    cfg = load_config(args.config, overrides)
     summary = run(cfg, args.outdir, make_plots=not args.no_plots)
     print_summary(summary)
     print(f"出力先: {args.outdir}")
