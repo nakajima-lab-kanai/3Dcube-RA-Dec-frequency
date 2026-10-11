@@ -12,8 +12,6 @@ pip install -r ../requirements.txt
 cd step1_single_point
 
 python run_step1.py                 # 既定設定で実行。outputs/step1/ に図と評価値を出力
-python -m pytest                    # テスト
-python run_linewidth_sweep.py       # 輝線幅 50 / 100 / 200 km/s を一括実行
 ```
 
 設定は `config/default.yaml` を編集するか、`--half-width-ch` や `--zigzag-step-ch`、`--atmosphere-model`、または `--set` で一時的に上書きします。
@@ -22,7 +20,7 @@ python run_linewidth_sweep.py       # 輝線幅 50 / 100 / 200 km/s を一括実
 python run_step1.py --half-width-ch 150 --zigzag-step-ch 10 --atmosphere-model laminar
 python run_step1.py --outdir outputs/offset50 --set noise.atmosphere.offset_k=50 --set removal.n_components=2
 python run_step1.py --set modulation.pattern=random
-python run_linewidth_sweep.py --line-fwhm-kms 50 100 200 --half-width-ch 150 300 600 --zigzag-step-ch 20
+python run_step1.py --set source.line_fwhm_kms=100 --half-width-ch 300
 ```
 
 同じ設定ファイル(同じ `seed`)なら結果は再現します。乱数は成分ごと(変調・熱雑音・大気)に独立なので、ある成分の設定を変えても他の成分の乱数列は変わりません。
@@ -109,20 +107,7 @@ python run_linewidth_sweep.py --line-fwhm-kms 50 100 200 --half-width-ch 150 300
 
 以上は単純な PCA 除去の性質を示したもので、輝線の損失を抑える方法(輝線モデルを先に引いてから PCA を繰り返すなど)は段階1では実装していません。
 
-### 輝線幅を変えた場合
-
-`python run_linewidth_sweep.py --half-width-ch 150 600` の結果(`none`、成分数 1、`offset_k` = 0)です。
-
-| 輝線幅 FWHM [km/s] | 変調の半幅 [ch] | 残差 RMS [K] | ピーク比 | 積分強度比 |
-|---|---|---|---|---|
-| 50 | 150 | 0.039 | 0.98 | 0.93 |
-| 50 | 600 | 0.039 | 1.01 | 0.96 |
-| 100 | 150 | 0.046 | 0.97 | 0.89 |
-| 100 | 600 | 0.045 | 1.00 | 0.91 |
-| 200 | 150 | 0.066 | 0.94 | 0.80 |
-| 200 | 600 | 0.065 | 0.97 | 0.80 |
-
-輝線が太いほど損失が増えます。全条件・全モードの値は `outputs/linewidth_sweep/sweep_summary.csv` に出力されます。
+輝線幅を変える場合は `--set source.line_fwhm_kms=100` のように指定します。輝線が太いほど輝線の損失は増えます。
 
 ## パラメータ一覧
 
@@ -189,15 +174,3 @@ python run_linewidth_sweep.py --line-fwhm-kms 50 100 200 --half-width-ch 150 300
 | `peak_ratio` | 正解のピークのチャンネルでの 復元 / 正解 |
 | `integrated_ratio` | 積分強度 [K km/s] の 復元 / 正解 |
 | `expected_thermal_rms_k` | 熱雑音だけを時間平均したときの期待 RMS [K] |
-
-## テスト
-
-`python -m pytest` で次を確認します。
-
-- 単位変換(km/s ↔ 周波数幅、FWHM ↔ σ)
-- 雑音なしなら変調 → 復調で元のスペクトルに戻ること、端の回り込みがないこと、窓がグリッドを超えるとエラーになること
-- 熱雑音の標準偏差がラジオメーター方程式の値と一致すること
-- 有色雑音のパワースペクトルの傾きが指定した α(1、2)と ±0.1 以内で一致すること
-- 大気の形が空の周波数に固定されていること
-- `channel_mean` の PCA 除去が sklearn の PCA と一致すること
-- 同じシードで結果が再現すること、大気オフセットが 0 以外でも動くこと
