@@ -78,6 +78,8 @@ python run_step1.py --set source.line_fwhm_kms=100 --half-width-ch 300
 
 ### 既定設定での結果(seed = 20261005、除去成分数 1)
 
+**この節の数値は、既定値を見直す前(`offset_k` = 0、`half_width_ch` = 150、`zigzag_step_ch` = 10)の結果です。見直し後の結果は次節を参照してください。**
+
 熱雑音だけを時間平均した場合の期待 RMS は 0.037 K です。
 
 | 処理 | 輝線なし領域の残差 RMS [K] | ピーク比 | 積分強度比 |
@@ -91,7 +93,33 @@ python run_step1.py --set source.line_fwhm_kms=100 --half-width-ch 300
 - **この設定では `no_pca` が最も正解に近くなります。** 大気の時間変動 a(t) は平均がちょうど 0 になるよう作っているので、1点を見続けて時間平均するだけで消えるためです。PCA の効果は時間平均後のスペクトルではなく、時間方向のパワースペクトル(図 7)に現れます。定数オフセットがある場合は次節のとおり状況が変わります。
 - ピーク比は1チャンネルの値の比なので、熱雑音による ±4 % 程度のばらつきを含みます。
 
+### 既定値の見直し前後の比較
+
+`offset_k`、`half_width_ch`、`zigzag_step_ch` の3つだけを、先行研究(Taniguchi+ 2019/2020)の実例に合わせて変えました(いずれも「要確認」の仮値)。変更前の値は `config/default.yaml` のコメントに残してあります。seed、除去成分数 1、その他の設定は同じです。数値は `metrics.json` をそのまま転記しました。
+
+| キー | 変更前 | 変更後 |
+|---|---|---|
+| `noise.atmosphere.offset_k` | 0.0 | 20.0 |
+| `modulation.half_width_ch` | 150 | 256 |
+| `modulation.zigzag_step_ch` | 10 | 80 |
+
+| 処理 | 指標 | 変更前 | 変更後 |
+|---|---|---|---|
+| `none` | ピーク比 | 0.9876 | 0.8226 |
+| `none` | 積分強度比 | 0.9336 | 0.6470 |
+| `none` | 輝線なし領域の残差 RMS [K] | 0.0394 | 0.0430 |
+| `channel_mean` | ピーク比 | 0.8309 | 0.8199 |
+| `channel_mean` | 積分強度比 | 0.4327 | 0.6396 |
+| `channel_mean` | 輝線なし領域の残差 RMS [K] | 0.0429 | 0.0430 |
+| `no_pca` | ピーク比 | 1.0005 | 20.9366 |
+| `no_pca` | 積分強度比 | 0.9838 | 75.8028 |
+| `no_pca` | 輝線なし領域の残差 RMS [K] | 0.0372 | 20.0264 |
+
+熱雑音だけの期待 RMS は両方とも 0.0370 K です。キューブの周波数範囲は余白(`margin_ch` = 50)のままで足りて、エラーは出ませんでした。変更後は `no_pca` に定数オフセットが 20 K そのまま残るため、PCA による除去が必須になります。
+
 ### 大気の定数オフセットと平均モードの組み合わせ
+
+**この節の表は、見直し前の既定値(`half_width_ch` = 150、`zigzag_step_ch` = 10)で計算したものです。**
 
 `noise.atmosphere.offset_k` を 0 以外にしても最後まで動きます(テストあり)。既定設定から `offset_k` と除去成分数だけを変えた結果です。
 
@@ -137,8 +165,8 @@ python run_step1.py --set source.line_fwhm_kms=100 --half-width-ch 300
 | `spectrometer.center_freq_ghz` | シフト 0 のときの帯域中心 | GHz | 150 | 輝線中心に合わせた |
 | `modulation.pattern` | 変調パターン(`zigzag` / `random`) | — | zigzag | — |
 | `modulation.dt_s` | 変調(=サンプリング)の時間間隔 | s | 0.1 | 打ち合わせの指定 |
-| `modulation.half_width_ch` | 変調の半幅。シフト量は ± この値 | ch | 150(± 約 73 MHz) | **要確認**(仮の値) |
-| `modulation.zigzag_step_ch` | ジグザグの1サンプルあたりのシフト量 | ch | 10 | **要確認**(仮の値)。周期は 4 × 半幅 / この値 = 60 サンプル = 6 秒 |
+| `modulation.half_width_ch` | 変調の半幅。シフト量は ± この値 | ch | 256(± 125 MHz) | **要確認**(仮の値)。先行研究の1点観測の実例に近づけた。変更前は 150 |
+| `modulation.zigzag_step_ch` | ジグザグの1サンプルあたりのシフト量 | ch | 80(約 39 MHz/サンプル) | **要確認**(仮の値)。先行研究のマッピング観測の実例(40 MHz)に近づけた。変更前は 10。周期は 4 × 半幅 / この値 = 12.8 サンプル |
 | `observation.duration_s` | 観測時間 | s | 60(600 サンプル) | **要確認**(仮の値) |
 | `noise.thermal.enabled` | 熱雑音を入れるか | — | true | — |
 | `noise.thermal.tsys_k` | システム雑音温度 | K | 200 | 打ち合わせの指定 |
@@ -146,7 +174,7 @@ python run_step1.py --set source.line_fwhm_kms=100 --half-width-ch 300
 | `noise.atmosphere.model` | 大気雑音モデル(`laminar`: 層流 / `turbulent` or `colored`: 乱流) | — | laminar | 穏やかな低周波変動 |
 | `noise.atmosphere.alpha` | 時間方向パワースペクトル f^(-α) の指数(colored の場合) | — | 1.0 | 打ち合わせの例(1、2)。**実際の値は要確認** |
 | `noise.atmosphere.rms_k` | 時間変動の標準偏差 | K | 1.0 | **要確認**(仮の値) |
-| `noise.atmosphere.offset_k` | 時間変動しない定数オフセット | K | 0 | **実際の大気の値は要確認** |
+| `noise.atmosphere.offset_k` | 時間変動しない定数オフセット | K | 20 | **要確認**(仮の値)。0 だと時間平均で大気が消えるため変更。変更前は 0 |
 | `noise.atmosphere.slope_frac` | 周波数方向の傾き(シフト 0 の帯域の両端で ± この値) | — | 0.1 | **要確認**(仮の値) |
 | `removal.n_components` | PCA で除去する成分数(0 で除去なし) | — | 1 | 仮の値 |
 | `removal.mean_mode` | PCA の平均の扱い | — | none | 上の節を参照 |
@@ -156,7 +184,7 @@ python run_step1.py --set source.line_fwhm_kms=100 --half-width-ch 300
 | `visualization.cube3d_opacity` | 等値面の透明度 | — | 0.35 | 見た目の選択 |
 | `visualization.cube3d_max_freq_points` | 3D 表示の周波数方向の点数の上限(超えると間引く) | — | 40 | HTML のサイズを抑えるため |
 
-既定値での派生量:帯域 2000 MHz、チャンネルあたりの速度幅 0.976 km/s、1サンプルの熱雑音 0.905 K、キューブの周波数チャンネル数 4496。
+既定値での派生量:帯域 2000 MHz、チャンネルあたりの速度幅 0.976 km/s、1サンプルの熱雑音 0.905 K、キューブの周波数チャンネル数 4708。
 
 ## 出力
 

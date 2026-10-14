@@ -29,8 +29,12 @@ spectrometer:
 modulation:
   pattern: zigzag           # zigzag または random
   dt_s: 0.1                 # 変調(=サンプリング)の時間間隔 [s]
-  half_width_ch: 150        # 変調の半幅 [ch]。シフト量は ±half_width_ch 要確認(仮の値)
-  zigzag_step_ch: 10        # ジグザグの1サンプルあたりのシフト量 [ch] 要確認(仮の値)
+  half_width_ch: 256        # 変調の半幅 [ch]。シフト量は ±half_width_ch 要確認(仮の値)
+                            # ±125 MHz(幅 250 MHz)。Taniguchi+ 2019/2020 の1点観測の実例に近づけた
+                            # 変更前: 150(± 約 73 MHz)
+  zigzag_step_ch: 80        # ジグザグの1サンプルあたりのシフト量 [ch] 要確認(仮の値)
+                            # 約 39 MHz/サンプル。マッピング観測の実例(40 MHz)に近づけた
+                            # 変更前: 10
                             # 周期 = 4 * half_width_ch / zigzag_step_ch サンプル
 
 observation:
@@ -45,7 +49,8 @@ noise:
     model: laminar          # laminar(層流: 穏やかな低周波変動) または colored/turbulent(乱流: f^-alpha 有色雑音)
     alpha: 1.0              # 時間方向パワースペクトル f^(-alpha) の指数(colored/turbulent の場合)
     rms_k: 1.0              # 時間変動の標準偏差 [K] 要確認(仮の値)
-    offset_k: 0.0           # 時間変動しない定数オフセット [K]
+    offset_k: 20.0          # 時間変動しない定数オフセット [K] 要確認(仮の値)
+                            # 0 だと時間平均で大気が消え、PCA の試験にならないため変更。変更前: 0.0
     slope_frac: 0.1         # 周波数方向の傾き。変調なしの帯域の両端で ±slope_frac 要確認(仮の値)
 
 removal:
