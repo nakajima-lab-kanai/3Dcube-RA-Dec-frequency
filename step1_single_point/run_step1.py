@@ -12,17 +12,19 @@ from pathlib import Path
 import numpy as np
 
 from fmlo_sim import cube as cube_mod
-from fmlo_sim import evaluation, pipeline, plotting
+from fmlo_sim import evaluation, pipeline, plotting, plotting3d
 from fmlo_sim.config import MEAN_MODES, load_config, parse_set_args
 
 HERE = Path(__file__).resolve().parent
 
 
-def run(cfg, outdir, make_plots=True, save_cube=True):
+def run(cfg, outdir, make_plots=True, save_cube=True, plot3d=False):
     """1回分のシミュレーションを実行し、評価値の辞書を返す
 
     PCA の平均の扱い(none / channel_mean)と PCA なしの3通りを、同じ観測データで評価する。
     """
+    if plot3d:
+        plotting3d.require_plotly()  # 未インストールなら、計算の前にエラーにする
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -84,6 +86,9 @@ def run(cfg, outdir, make_plots=True, save_cube=True):
         plotting.plot_restored(outdir / "fig06_restored_spectrum.png", sim, results)
         plotting.plot_power_spectra(outdir / "fig07_power_spectra.png", psd)
 
+    if plot3d:
+        plotting.plot_cube_3d(outdir / "fig08_cube3d.html", sim)
+
     return summary
 
 
@@ -108,8 +113,16 @@ def main():
                         help="大気雑音モデル ('laminar': 層流, 'turbulent'/'colored': 乱流、既定値: configの値)")
     parser.add_argument("--set", action="append", metavar="KEY=VALUE",
                         help="設定の上書き(例: --set removal.n_components=2)。複数指定可")
+    parser.add_argument("--plot3d", action="store_true",
+                        help="キューブの3D表示(fig08_cube3d.html)も出力する。plotly が必要")
     parser.add_argument("--no-plots", action="store_true", help="図を出力しない")
     args = parser.parse_args()
+
+    if args.plot3d:
+        try:
+            plotting3d.require_plotly()
+        except ImportError as e:
+            parser.exit(1, f"エラー: {e}\n")
 
     overrides = parse_set_args(args.set)
     if args.half_width_ch is not None:
@@ -120,7 +133,7 @@ def main():
         overrides["noise.atmosphere.model"] = args.atmosphere_model
 
     cfg = load_config(args.config, overrides)
-    summary = run(cfg, args.outdir, make_plots=not args.no_plots)
+    summary = run(cfg, args.outdir, make_plots=not args.no_plots, plot3d=args.plot3d)
     print_summary(summary)
     print(f"出力先: {args.outdir}")
 

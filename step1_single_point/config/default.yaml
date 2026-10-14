@@ -54,3 +54,9 @@ removal:
 
 evaluation:
   line_free_n_fwhm: 2.0     # 輝線中心から ±(この値 × FWHM) の外側を「輝線のない領域」とする
+
+visualization:              # 3D 可視化(--plot3d)のパラメータ。plotly が必要(任意依存)
+  cube3d_half_range_n_fwhm: 3.0   # 周波数方向を輝線中心 ±(この値 × FWHM) に切り出して描く
+  cube3d_iso_fractions: [0.2, 0.5, 0.8]  # 等値面の値。ピーク値に対する割合(0〜1)
+  cube3d_opacity: 0.35      # 等値面の透明度(0 で完全に透明、1 で不透明)
+  cube3d_max_freq_points: 40  # 描画する周波数方向の点数の上限(HTML のサイズを抑えるため間引く)

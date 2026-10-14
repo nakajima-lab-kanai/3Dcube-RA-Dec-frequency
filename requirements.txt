@@ -3,3 +3,4 @@ scipy
 matplotlib
 scikit-learn
 pyyaml
+# 任意(optional): plotly  -- 3D 可視化 (--plot3d) を使うときだけ `pip install plotly`

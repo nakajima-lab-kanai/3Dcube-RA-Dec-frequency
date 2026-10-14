@@ -8,7 +8,7 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, get_type_hints
+from typing import List, Optional, get_type_hints
 
 import numpy as np
 import yaml
@@ -103,6 +103,14 @@ class EvaluationConfig:
 
 
 @dataclass
+class VisualizationConfig:
+    cube3d_half_range_n_fwhm: float
+    cube3d_iso_fractions: List[float]
+    cube3d_opacity: float
+    cube3d_max_freq_points: int
+
+
+@dataclass
 class Config:
     seed: int
     source: SourceConfig
@@ -114,6 +122,7 @@ class Config:
     noise: NoiseConfig
     removal: RemovalConfig
     evaluation: EvaluationConfig
+    visualization: VisualizationConfig
 
     @property
     def n_time(self) -> int:
@@ -197,6 +206,17 @@ def validate(cfg: Config) -> None:
         raise ValueError("modulation.zigzag_step_ch は 1 以上である必要があります")
     if 2 * cfg.modulation.half_width_ch >= cfg.spectrometer.n_channels:
         raise ValueError("変調幅が分光計の帯域以上になっています")
+    viz = cfg.visualization
+    if viz.cube3d_half_range_n_fwhm <= 0:
+        raise ValueError("visualization.cube3d_half_range_n_fwhm は正の値である必要があります")
+    if not isinstance(viz.cube3d_iso_fractions, list) or not viz.cube3d_iso_fractions:
+        raise ValueError("visualization.cube3d_iso_fractions は1つ以上の値のリストで指定してください")
+    if not all(isinstance(x, (int, float)) and 0 < x <= 1 for x in viz.cube3d_iso_fractions):
+        raise ValueError("visualization.cube3d_iso_fractions の値は 0 より大きく 1 以下である必要があります")
+    if not 0 <= viz.cube3d_opacity <= 1:
+        raise ValueError("visualization.cube3d_opacity は 0〜1 の範囲で指定してください")
+    if viz.cube3d_max_freq_points < 2:
+        raise ValueError("visualization.cube3d_max_freq_points は 2 以上である必要があります")
     if cfg.n_time < 2:
         raise ValueError("観測時間が短すぎます")
 

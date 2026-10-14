@@ -239,3 +239,9 @@ def plot_power_spectra(path, psd):
         ax.grid(True, which="major")
         ax.legend(loc="best")
     _save(fig, path)
+
+
+def plot_cube_3d(path, sim):
+    """RA × Dec × 速度の3D等値面(HTML)。plotly が必要なので、呼ばれたときだけ import する"""
+    from . import plotting3d
+    plotting3d.plot_cube_3d(path, sim)

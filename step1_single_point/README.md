@@ -12,6 +12,13 @@ pip install -r ../requirements.txt
 cd step1_single_point
 
 python run_step1.py                 # 既定設定で実行。outputs/step1/ に図と評価値を出力
+python run_step1.py --plot3d        # 加えてキューブの3D表示 fig08_cube3d.html を出力(plotly が必要)
+```
+
+3D 表示は plotly の等値面で、ブラウザで回転・拡大できる HTML(plotly.js を埋め込んだ自己完結の1ファイル、約 10 MB)です。plotly は**任意依存**で、`pip install plotly` で別途入れます(`--plot3d` を付けない通常の実行には不要)。保存済みの `cube.npz` からも単独で描けます。
+
+```bash
+python -m fmlo_sim.plotting3d outputs/step1/cube.npz --out cube3d.html
 ```
 
 設定は `config/default.yaml` を編集するか、`--half-width-ch` や `--zigzag-step-ch`、`--atmosphere-model`、または `--set` で一時的に上書きします。
@@ -144,6 +151,10 @@ python run_step1.py --set source.line_fwhm_kms=100 --half-width-ch 300
 | `removal.n_components` | PCA で除去する成分数(0 で除去なし) | — | 1 | 仮の値 |
 | `removal.mean_mode` | PCA の平均の扱い | — | none | 上の節を参照 |
 | `evaluation.line_free_n_fwhm` | 輝線なし領域の境界(FWHM の何倍か) | — | 2.0 | 解析上の選択 |
+| `visualization.cube3d_half_range_n_fwhm` | 3D 表示で、周波数方向を輝線中心 ±(この値 × FWHM) に切り出す | — | 3.0 | 見た目の選択(変調の余白を除くため) |
+| `visualization.cube3d_iso_fractions` | 等値面の値(切り出し範囲のピーク値に対する割合) | — | [0.2, 0.5, 0.8] | 見た目の選択 |
+| `visualization.cube3d_opacity` | 等値面の透明度 | — | 0.35 | 見た目の選択 |
+| `visualization.cube3d_max_freq_points` | 3D 表示の周波数方向の点数の上限(超えると間引く) | — | 40 | HTML のサイズを抑えるため |
 
 既定値での派生量:帯域 2000 MHz、チャンネルあたりの速度幅 0.976 km/s、1サンプルの熱雑音 0.905 K、キューブの周波数チャンネル数 4496。
 
@@ -164,6 +175,7 @@ python run_step1.py --set source.line_fwhm_kms=100 --half-width-ch 300
 | `fig05_pca_removal.png` | PCA で除去した成分、除去後のデータ、主成分のスペクトル |
 | `fig06_restored_spectrum.png` | 復元スペクトルと正解スペクトル、残差 |
 | `fig07_power_spectra.png` | PCA 前後の時間方向パワースペクトル(輝線が一度も入らないチャンネル) |
+| `fig08_cube3d.html` | キューブの3D等値面(`--plot3d` のときだけ)。軸は RA・Dec オフセット [arcsec] と視線速度 [km/s]、hover で周波数 [GHz] と強度 [K]。破線は観測した点 |
 
 評価値の意味は次のとおりです。
 
