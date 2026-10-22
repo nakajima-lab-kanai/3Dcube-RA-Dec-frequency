@@ -18,10 +18,19 @@ GRID = "#e1e0d9"
 BLUE = "#2a78d6"
 ORANGE = "#eb6834"
 AQUA = "#1baf7a"
+PURPLE = "#8b5cf6"
 
 # 系列の色は系列ごとに固定する(図をまたいで同じ色)
-MODE_COLORS = {"none": BLUE, "channel_mean": ORANGE}
-MODE_LABELS = {"none": "PCA, mean_mode = none", "channel_mean": "PCA, mean_mode = channel_mean"}
+MODE_COLORS = {
+    "none": BLUE,
+    "channel_mean": ORANGE,
+    "fa_ica": AQUA,
+}
+MODE_LABELS = {
+    "none": "PCA, mean_mode = none",
+    "channel_mean": "PCA, mean_mode = channel_mean",
+    "fa_ica": "FA+ICA",
+}
 
 # 大きさ(0 以上)は青の単色、符号付きの量は青–灰–橙の発散型
 CMAP_SEQ = LinearSegmentedColormap.from_list(
@@ -172,7 +181,7 @@ def plot_pca(path, sim, red):
     ch = np.arange(sim.grid.n_channels)
     colors = [BLUE, ORANGE, AQUA]
     for i, comp in enumerate(red.pca.components[:3]):
-        axs[2].plot(ch, comp, color=colors[i], linewidth=1.0,
+        axs[2].plot(ch, comp, color=colors[i % len(colors)], linewidth=1.0,
                     label=f"Component {i + 1} ({100 * red.pca.explained_ratio[i]:.1f} % of variance)")
     axs[2].set_title("Spectra of the removed principal components")
     axs[2].set_xlabel("Spectrometer channel (ch)")
@@ -180,6 +189,55 @@ def plot_pca(path, sim, red):
     axs[2].grid(True)
     if len(red.pca.components):
         axs[2].legend(loc="best")
+    _save(fig, path)
+
+
+def plot_fa_ica_components(path, sim, red):
+    """FA+ICA の成分診断図(除去成分・除去後データ・時間波形・周波数プロファイル)"""
+    fa_ica = red.fa_ica
+    fig, axs = plt.subplots(2, 2, figsize=(16, 9.5))
+
+    # 1. 除去した全成分
+    vmin, vmax = _signed_limits(fa_ica.removed)
+    _tod_image(axs[0, 0], fa_ica.removed, sim.time_s, CMAP_DIV, vmin, vmax,
+               f"Removed by FA+ICA ({len(fa_ica.remove_indices)}/{fa_ica.n_factors} comp., mean_mode = {fa_ica.mean_mode})",
+               "Intensity (K)")
+
+    # 2. 除去後のデータ
+    vmin, vmax = _signed_limits(fa_ica.cleaned)
+    _tod_image(axs[0, 1], fa_ica.cleaned, sim.time_s, CMAP_DIV, vmin, vmax,
+               "Data after FA+ICA removal", "Intensity (K)")
+
+    # 3. ICA 独立成分の時間波形 S_j(t)
+    colors = [BLUE, ORANGE, AQUA, PURPLE, INK_SECONDARY]
+    for j in range(fa_ica.n_factors):
+        c = colors[j % len(colors)]
+        is_rem = j in fa_ica.remove_indices
+        label = f"Comp {j} {'[REMOVED]' if is_rem else '[KEPT]'}"
+        lw = 1.8 if is_rem else 1.0
+        ls = "-" if is_rem else "--"
+        axs[1, 0].plot(sim.time_s, fa_ica.ica_components[:, j], color=c, lw=lw, ls=ls, label=label)
+    axs[1, 0].set_title(f"ICA independent components (time waveforms, n_iter={fa_ica.ica_n_iter})")
+    axs[1, 0].set_xlabel("Time (s)")
+    axs[1, 0].set_ylabel("Amplitude (unit variance)")
+    axs[1, 0].grid(True)
+    axs[1, 0].legend(loc="best")
+
+    # 4. 有効スペクトルプロファイル M_j(ν)
+    ch = np.arange(sim.grid.n_channels)
+    for j in range(fa_ica.n_factors):
+        c = colors[j % len(colors)]
+        is_rem = j in fa_ica.remove_indices
+        label = f"Profile {j} {'[REMOVED]' if is_rem else '[KEPT]'}"
+        lw = 1.8 if is_rem else 1.0
+        ls = "-" if is_rem else "--"
+        axs[1, 1].plot(ch, fa_ica.effective_profiles[j], color=c, lw=lw, ls=ls, label=label)
+    axs[1, 1].set_title("Effective spectral profiles M = A$^T$ L (channel response)")
+    axs[1, 1].set_xlabel("Spectrometer channel (ch)")
+    axs[1, 1].set_ylabel("Profile amplitude (K)")
+    axs[1, 1].grid(True)
+    axs[1, 1].legend(loc="best")
+
     _save(fig, path)
 
 
@@ -191,12 +249,18 @@ def plot_restored(path, sim, results):
     fwhm_ghz = cfg.source.center_freq_ghz * cfg.source.line_fwhm_kms / 299792.458
     zoom = (cfg.source.center_freq_ghz - 4 * fwhm_ghz, cfg.source.center_freq_ghz + 4 * fwhm_ghz)
 
+    plot_modes = [m for m in ("none", "channel_mean", "fa_ica") if m in results]
+
     fig, axs = plt.subplots(3, 1, figsize=(11, 10.5))
     for ax, title in zip(axs[:2], ["Restored vs ground-truth spectrum (fully covered range)",
                                    "Zoom on the line"]):
-        for mode in ("none", "channel_mean"):
-            ax.plot(freq[valid], results[mode].restored_k[valid], color=MODE_COLORS[mode],
-                    linewidth=1.0, label=MODE_LABELS[mode])
+        for mode in plot_modes:
+            label = MODE_LABELS.get(mode, mode)
+            if mode == "fa_ica" and results[mode].fa_ica is not None:
+                fa_ica = results[mode].fa_ica
+                label = f"FA+ICA (factors={fa_ica.n_factors}, rem={fa_ica.remove_indices}, mean={fa_ica.mean_mode})"
+            ax.plot(freq[valid], results[mode].restored_k[valid], color=MODE_COLORS.get(mode, AQUA),
+                    linewidth=1.0, label=label)
         ax.plot(freq[valid], sim.truth_k[valid], color=INK, linewidth=1.6, label="Ground truth")
         ax.set_title(title)
         ax.set_ylabel("Intensity (K)")
@@ -204,9 +268,13 @@ def plot_restored(path, sim, results):
         ax.legend(loc="upper right")
     axs[1].set_xlim(*zoom)
 
-    for mode in ("none", "channel_mean"):
+    for mode in plot_modes:
+        label = MODE_LABELS.get(mode, mode)
+        if mode == "fa_ica" and results[mode].fa_ica is not None:
+            fa_ica = results[mode].fa_ica
+            label = f"FA+ICA (factors={fa_ica.n_factors}, rem={fa_ica.remove_indices}, mean={fa_ica.mean_mode})"
         axs[2].plot(freq[valid], (results[mode].restored_k - sim.truth_k)[valid],
-                    color=MODE_COLORS[mode], linewidth=1.0, label=MODE_LABELS[mode])
+                    color=MODE_COLORS.get(mode, AQUA), linewidth=1.0, label=label)
     axs[2].axhline(0, color=INK, linewidth=0.8)
     axs[2].set_title("Residual (restored - ground truth), zoom on the line")
     axs[2].set_xlim(*zoom)
@@ -219,18 +287,23 @@ def plot_restored(path, sim, results):
 
 
 def plot_power_spectra(path, psd):
-    """PCA 前後の雑音の時間方向パワースペクトル
+    """PCA / FA+ICA 前後の雑音の時間方向パワースペクトル
 
-    psd: {'before' | 'none' | 'channel_mean': (freqs_hz, psd_per_channel, psd_common)}
+    psd: {'before' | 'none' | 'channel_mean' | 'fa_ica': (freqs_hz, psd_per_channel, psd_common)}
     """
-    series = [("before", INK_SECONDARY, "Before PCA (observed data)"),
+    series = [("before", INK_SECONDARY, "Before removal (observed data)"),
               ("none", MODE_COLORS["none"], "After " + MODE_LABELS["none"]),
               ("channel_mean", MODE_COLORS["channel_mean"], "After " + MODE_LABELS["channel_mean"])]
+    if "fa_ica" in psd:
+        series.append(("fa_ica", MODE_COLORS["fa_ica"], "After " + MODE_LABELS["fa_ica"]))
+
     titles = ["Mean of per-channel power spectra (line-free channels)",
               "Power spectrum of the channel-averaged time series (common mode)"]
     fig, axs = plt.subplots(1, 2, figsize=(14, 4.8))
     for i, ax in enumerate(axs):
         for key, color, label in series:
+            if key not in psd:
+                continue
             freqs = psd[key][0]
             ax.loglog(freqs, np.maximum(psd[key][i + 1], 1e-300), color=color, label=label)
         ax.set_title(titles[i])

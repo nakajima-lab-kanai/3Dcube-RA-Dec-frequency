@@ -51,6 +51,13 @@ noise:
 removal:
   n_components: 1           # PCA で除去する成分数(0 なら除去しない)
   mean_mode: none           # none(平均を引かない)または channel_mean(各チャンネルの時間平均を引く)
+  fa_ica:
+    n_factors: 2            # FA の因子数 (共通因子数)
+    mean_mode: channel_mean # channel_mean または none
+    remove_indices: [0]     # 除去する ICA 独立成分のインデックス (リスト)
+    random_state: 42        # ICA の初期値乱数シード
+    max_iter: 500           # ICA の最大反復回数
+    tol: 0.0001             # ICA の収束許容値
 
 evaluation:
   line_free_n_fwhm: 2.0     # 輝線中心から ±(この値 × FWHM) の外側を「輝線のない領域」とする

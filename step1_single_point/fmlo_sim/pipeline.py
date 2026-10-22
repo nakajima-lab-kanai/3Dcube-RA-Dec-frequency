@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import List, Optional
 
 import numpy as np
 
@@ -35,10 +36,28 @@ class Reduction:
     label: str
     n_components: int
     mean_mode: str
-    pca: removal.PcaResult
+    pca: Optional[removal.PcaResult]
     restored_k: np.ndarray      # 復元スペクトル (n_wide,) [K]
     hits: np.ndarray
     metrics: dict
+    method: str = "pca"
+    fa_ica: Optional[removal.FaIcaResult] = None
+
+    @property
+    def cleaned(self) -> np.ndarray:
+        if self.pca is not None:
+            return self.pca.cleaned
+        if self.fa_ica is not None:
+            return self.fa_ica.cleaned
+        raise AttributeError("No removal result available")
+
+    @property
+    def removed(self) -> np.ndarray:
+        if self.pca is not None:
+            return self.pca.removed
+        if self.fa_ica is not None:
+            return self.fa_ica.removed
+        raise AttributeError("No removal result available")
 
 
 def simulate(cfg: Config) -> Simulation:
@@ -99,17 +118,75 @@ def reduce(sim: Simulation, n_components: int, mean_mode: str, label=None) -> Re
         cfg.source.center_freq_ghz, cfg.source.line_fwhm_kms,
         cfg.evaluation.line_free_n_fwhm, grid.channel_width_ghz,
     )
-    return Reduction(label or mean_mode, n_components, mean_mode, pca, restored, hits, metrics)
+    lbl = label or mean_mode
+    method = "none" if lbl == "no_pca" else "pca"
+    return Reduction(lbl, n_components, mean_mode, pca, restored, hits, metrics, method=method)
+
+
+def reduce_fa_ica(
+    sim: Simulation,
+    n_factors: int,
+    remove_indices: Optional[List[int]] = None,
+    mean_mode: str = "channel_mean",
+    random_state: int = 42,
+    max_iter: int = 500,
+    tol: float = 1e-4,
+    label: Optional[str] = None,
+) -> Reduction:
+    """FA+ICA で特定成分を除去し、復調・時間平均して評価する"""
+    cfg, grid = sim.cfg, sim.grid
+    fa_ica_res = removal.fa_ica_remove(
+        sim.observed,
+        n_factors=n_factors,
+        remove_indices=remove_indices,
+        mean_mode=mean_mode,
+        random_state=random_state,
+        max_iter=max_iter,
+        tol=tol,
+    )
+    restored, hits = modulation.demodulate(fa_ica_res.cleaned, sim.shifts_ch, grid.start0, grid.n_wide)
+    metrics = evaluation.evaluate(
+        restored, sim.truth_k, hits, cfg.n_time, grid.freq_ghz,
+        cfg.source.center_freq_ghz, cfg.source.line_fwhm_kms,
+        cfg.evaluation.line_free_n_fwhm, grid.channel_width_ghz,
+    )
+    lbl = label or f"fa_ica_{mean_mode}"
+    n_comp = len(fa_ica_res.remove_indices)
+    return Reduction(
+        label=lbl,
+        n_components=n_comp,
+        mean_mode=mean_mode,
+        pca=None,
+        restored_k=restored,
+        hits=hits,
+        metrics=metrics,
+        method="fa_ica",
+        fa_ica=fa_ica_res,
+    )
 
 
 def reduce_all_modes(sim: Simulation) -> dict:
     """同じ観測データに対して、平均の扱いを変えた結果を並べて返す
 
     'no_pca' は PCA も平均除去も行わず復調だけした参照用の結果。
+    'fa_ica' は FA+ICA による除去結果。
     """
     k = sim.cfg.removal.n_components
     results = {mode: reduce(sim, k, mode) for mode in MEAN_MODES}
     results["no_pca"] = reduce(sim, 0, "none", label="no_pca")
+
+    if sim.cfg.removal.fa_ica is not None:
+        fa_cfg = sim.cfg.removal.fa_ica
+        results["fa_ica"] = reduce_fa_ica(
+            sim,
+            n_factors=fa_cfg.n_factors,
+            remove_indices=fa_cfg.remove_indices,
+            mean_mode=fa_cfg.mean_mode,
+            random_state=fa_cfg.random_state,
+            max_iter=fa_cfg.max_iter,
+            tol=fa_cfg.tol,
+            label="fa_ica",
+        )
     return results
 
 

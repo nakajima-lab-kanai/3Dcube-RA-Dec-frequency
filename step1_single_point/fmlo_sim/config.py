@@ -8,7 +8,7 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, get_type_hints
+from typing import List, Optional, get_type_hints
 
 import numpy as np
 import yaml
@@ -92,9 +92,20 @@ class NoiseConfig:
 
 
 @dataclass
+class FaIcaConfig:
+    n_factors: int
+    mean_mode: str
+    remove_indices: List[int]
+    random_state: int
+    max_iter: int
+    tol: float
+
+
+@dataclass
 class RemovalConfig:
     n_components: int
     mean_mode: str
+    fa_ica: FaIcaConfig
 
 
 @dataclass
@@ -199,6 +210,24 @@ def validate(cfg: Config) -> None:
         raise ValueError("変調幅が分光計の帯域以上になっています")
     if cfg.n_time < 2:
         raise ValueError("観測時間が短すぎます")
+    
+    # FA+ICA の設定バリデーション
+    fa_ica = cfg.removal.fa_ica
+    if fa_ica.n_factors < 1:
+        raise ValueError("removal.fa_ica.n_factors は 1 以上である必要があります")
+    if fa_ica.mean_mode not in MEAN_MODES:
+        raise ValueError(f"removal.fa_ica.mean_mode は {MEAN_MODES} のいずれかです")
+    if fa_ica.max_iter < 1:
+        raise ValueError("removal.fa_ica.max_iter は 1 以上である必要があります")
+    if fa_ica.tol <= 0:
+        raise ValueError("removal.fa_ica.tol は正の値である必要があります")
+    if not isinstance(fa_ica.remove_indices, list):
+        raise ValueError("removal.fa_ica.remove_indices は整数のリストである必要があります")
+    for idx in fa_ica.remove_indices:
+        if not isinstance(idx, int) or not (0 <= idx < fa_ica.n_factors):
+            raise ValueError(
+                f"removal.fa_ica.remove_indices のインデックス {idx} は 0 以上 {fa_ica.n_factors} 未満である必要があります"
+            )
 
 
 def load_config(path=None, overrides: Optional[dict] = None) -> Config:
