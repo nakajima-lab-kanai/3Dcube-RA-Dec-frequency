@@ -174,3 +174,71 @@ python run_step1.py --set source.line_fwhm_kms=100 --half-width-ch 300
 | `peak_ratio` | 正解のピークのチャンネルでの 復元 / 正解 |
 | `integrated_ratio` | 積分強度 [K km/s] の 復元 / 正解 |
 | `expected_thermal_rms_k` | 熱雑音だけを時間平均したときの期待 RMS [K] |
+
+
+## Taniguchi et al. (2020) Fig. 6 対応 2ステップ成分推定 (段階①検証)
+
+Taniguchi et al. (2020), PASJ 72(1), 2 の §3.2 および Figure 6 に対応する、1回目・2回目の成分推定診断図を出力する専用スクリプトです。
+
+### 実行方法
+
+```bash
+cd step1_single_point
+
+# 論文照合用設定 (peak_k=5.0 K の強輝線条件) で実行
+python run_fig6.py
+
+# 既定設定 (default.yaml, peak_k=1.0 K) で実行
+python run_fig6.py --config config/default.yaml --outdir outputs/fig6_default
+
+# 平均除去モードを channel_mean に変更して実行
+python run_fig6.py --set removal.mean_mode=channel_mean --outdir outputs/fig6_channel_mean
+```
+
+テストの実行:
+```bash
+pytest tests/
+```
+※ コミット `d38339b` において対象テストスクリプト群が削除されているため、今回の機能追加に合わせて `tests/test_fig6.py` および `tests/conftest.py` を整備しています。
+
+### 出力ファイル (`outputs/fig6/`)
+
+| ファイル | 内容 |
+|---|---|
+| `fig09_fig6_diagnostics.png` | 2行×4列の成分推定診断図 (輝線中心付近の拡大表示: 既定 ±250 ch) |
+| `fig09_fig6_diagnostics_full.png` | 全 4096 ch を表示した診断図 |
+| `metrics_fig6.json` | 1回目・2回目の評価指標、変化量、加算恒等式の最大誤差 |
+| `timestream_fig6.npz` | 各推定ステップの TOD 配列 ($X, U_r, C_r, A_r, E_r$) およびモデル・復元スペクトル |
+
+### 処理の概要と記号の定義
+
+すべての TOD 配列は同一の時間×分光器チャンネル座標 `(n_time, n_channels)` [K] で扱われます。
+
+- $X$: 元の模擬観測 TOD
+- $A_r$: $r$ 回目で推定した天体信号 TOD ($A_0 = 0$)
+- $C_r$: $r$ 回目で推定した相関成分 TOD (PCA 除去成分。チャンネル平均を含む)
+- $E_r$: $r$ 回目の残差 TOD ($E_r = X - C_r - A_r$)
+
+各回 $r=1, 2$ の手順:
+1. $U_r = X - A_{r-1}$ ($U_1 = X$, $U_2 = X - A_1$)
+2. $U_r$ に PCA を適用して相関成分 $C_r$ を推定
+3. $X - C_r$ を復調・時間平均し、天体スペクトルモデル $\tilde{s}^\mathrm{model}_r$ を推定
+4. $\tilde{s}^\mathrm{model}_r$ を FMLO シフトで再変調し、天体信号 TOD $A_r$ を作成
+5. $E_r = X - C_r - A_r$ を算出
+
+数学的恒等式 $X = C_r + A_r + E_r$ がマシンイプシロン水準 ($< 10^{-14}$ K) で厳密に成り立ちます。
+
+### 論文との照合範囲および実装上の選択・省略事項
+
+- **論文の該当箇所**:
+  - PASJ 72(1), 2 (2020), §3.2 Data reduction procedure, Figure 6 (Flowchart)
+  - §2.4 Making a model timestream from a final product, 式(28)
+- **実証解析条件の扱い**:
+  - 論文 §4.1 の実証解析では $\theta_\mathrm{cutoff} = 5$, $K \simeq 5$, 収束閾値 $\varepsilon = 0.05$ が採用されていますが、これらは実証解析における採用条件であり普遍的な推奨値ではありません。本実装では cutoff は既定 5.0、成分数 $K$ は大気モデルに合わせて設定します。
+- **反復回数**:
+  - 論文の収束反復（Frobenius ノルム判定）は実装せず、$r=1, 2$ の 2回固定としています。2回目で必ず改善・完全復元すると仮定せず、変化（改善または悪化）を客観的に記録します。
+- **サイドバンドモデル**:
+  - 本シミュレーションは「イメージ側の天体輝線・大気輝線を省略した簡易モデル」として扱っており、受信機の 1SB 化や $R=0$ と同一視するものではありません。
+- **雑音水準の推定方法**:
+  - 全時刻観測された領域 ($hits == n_\mathrm{time}$) の有限値から中央値絶対偏差 (MAD) により基本雑音水準 $\sigma_0$ を求め、ヒット数補正 $\sigma_d = \sigma_0 \sqrt{n_\mathrm{time} / hits_d}$ を適用するシミュレーション用の簡易推定法です。論文の重み付き分散推定と同一ではありません。
+  - 輝線（全体幅の約 1%）の影響は MAD に対しロバストであり、有効点不足や完全無雑音時 (MAD=0) の安全なフォールバックを定義しています。

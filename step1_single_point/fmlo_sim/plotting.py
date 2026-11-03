@@ -239,3 +239,107 @@ def plot_power_spectra(path, psd):
         ax.grid(True, which="major")
         ax.legend(loc="best")
     _save(fig, path)
+
+
+def plot_fig6_diagnostics(path, result, time_s, ch_range=None, title_suffix=""):
+    """Taniguchi et al. (2020) Fig. 6 に対応する 2行×4列の成分推定診断図
+
+    行構成:
+      Row 1 (1st estimate): X, C_1, A_1, E_1
+      Row 2 (2nd estimate): U_2 (= X - A_1), C_2, A_2, E_2
+
+    列ごとの表示規則:
+      - Col 0 (Input TOD): X と U_2 で共通のカラーレンジ
+      - Col 1 (Correlated TOD): C_1 と C_2 で共通のカラーレンジ
+      - Col 2 (Estimated Sky Signal): A_1 と A_2 で共通のカラーレンジ
+      - Col 3 (Residual TOD): E_1 と E_2 で共通の対称カラーレンジ (0 を中央とする)
+
+    横軸は分光計チャンネル (IF 座標)。
+    ch_range を指定した場合は描画のみを指定スライスに限定する (元データは不変)。
+    """
+    x = result.x_tod
+    u1, c1, a1, e1 = result.iter1.u_tod, result.iter1.c_tod, result.iter1.a_tod, result.iter1.e_tod
+    u2, c2, a2, e2 = result.iter2.u_tod, result.iter2.c_tod, result.iter2.a_tod, result.iter2.e_tod
+
+    n_time, n_channels = x.shape
+    dt = time_s[1] - time_s[0]
+
+    if ch_range is not None:
+        ch_start, ch_end = ch_range
+        ch_start = max(0, int(ch_start))
+        ch_end = min(n_channels, int(ch_end))
+        ch_slice = slice(ch_start, ch_end)
+        extent = [ch_start - 0.5, ch_end - 0.5, time_s[0], time_s[-1] + dt]
+    else:
+        ch_slice = slice(None)
+        extent = [-0.5, n_channels - 0.5, time_s[0], time_s[-1] + dt]
+
+    # スライス適用 (描画用)
+    x_p = x[:, ch_slice]
+    u1_p, c1_p, a1_p, e1_p = u1[:, ch_slice], c1[:, ch_slice], a1[:, ch_slice], e1[:, ch_slice]
+    u2_p, c2_p, a2_p, e2_p = u2[:, ch_slice], c2[:, ch_slice], a2[:, ch_slice], e2[:, ch_slice]
+
+    # 各列のカラーレンジ決定 (1回目と2回目で同一)
+    # Col 0: Input (X, U_2)
+    inputs = np.concatenate([x_p.ravel(), u2_p.ravel()])
+    v0_min, v0_max = float(np.percentile(inputs, 0.5)), float(np.percentile(inputs, 99.5))
+
+    # Col 1: Correlated (C_1, C_2)
+    corrs = np.concatenate([c1_p.ravel(), c2_p.ravel()])
+    v1_min, v1_max = float(np.percentile(corrs, 0.5)), float(np.percentile(corrs, 99.5))
+
+    # Col 2: Signal (A_1, A_2)
+    sigs = np.concatenate([a1_p.ravel(), a2_p.ravel()])
+    v2_min = 0.0
+    v2_max = max(float(np.percentile(sigs, 99.8)), 0.1)
+
+    # Col 3: Residual (E_1, E_2) (符号付き・0 中心)
+    resids = np.concatenate([e1_p.ravel(), e2_p.ravel()])
+    e_abs_max = max(float(np.percentile(np.abs(resids), 99.5)), 0.1)
+    v3_min, v3_max = -e_abs_max, e_abs_max
+
+    fig, axs = plt.subplots(2, 4, figsize=(18, 8.5), sharex=True, sharey=True)
+
+    grid_data = [
+        # Row 1: 1st estimate
+        [
+            (x_p, CMAP_SEQ, v0_min, v0_max, "$X$ (Observed TOD)", "Input: $X$ [K]"),
+            (c1_p, CMAP_DIV, v1_min, v1_max, r"$\hat{T}_{\mathrm{cor},1}$ ($C_1$)", "Correlated [K]"),
+            (a1_p, CMAP_SEQ, v2_min, v2_max, r"$\hat{T}_{\mathrm{ast},1}$ ($A_1$)", "Sky signal [K]"),
+            (e1_p, CMAP_DIV, v3_min, v3_max, r"$\hat{E}_{\mathrm{nc},1}$ ($E_1 = X - C_1 - A_1$)", "Residual [K]"),
+        ],
+        # Row 2: 2nd estimate
+        [
+            (u2_p, CMAP_SEQ, v0_min, v0_max, r"$U_2 = X - \hat{T}_{\mathrm{ast},1}$", "Input: $X - A_1$ [K]"),
+            (c2_p, CMAP_DIV, v1_min, v1_max, r"$\hat{T}_{\mathrm{cor},2}$ ($C_2$)", "Correlated [K]"),
+            (a2_p, CMAP_SEQ, v2_min, v2_max, r"$\hat{T}_{\mathrm{ast},2}$ ($A_2$)", "Sky signal [K]"),
+            (e2_p, CMAP_DIV, v3_min, v3_max, r"$\hat{E}_{\mathrm{nc},2}$ ($E_2 = X - C_2 - A_2$)", "Residual [K]"),
+        ],
+    ]
+
+    row_titles = ["1st estimate (r=1)", "2nd estimate (r=2)"]
+
+    for row_idx in range(2):
+        for col_idx in range(4):
+            ax = axs[row_idx, col_idx]
+            data, cmap, vmin, vmax, title, cbar_label = grid_data[row_idx][col_idx]
+            im = ax.imshow(
+                data, aspect="auto", origin="lower", cmap=cmap, vmin=vmin, vmax=vmax,
+                extent=extent, interpolation="nearest",
+            )
+            ax.set_title(title, fontsize=10)
+            if col_idx == 0:
+                ax.set_ylabel(f"{row_titles[row_idx]}\nTime (s)")
+            else:
+                ax.set_ylabel("")
+            if row_idx == 1:
+                ax.set_xlabel("Spectrometer channel (IF ch)")
+            ax.figure.colorbar(im, ax=ax, label=cbar_label, fraction=0.046, pad=0.04)
+
+    fig.suptitle(
+        f"Taniguchi et al. (2020) Fig. 6 Component Diagnostics{title_suffix}\n"
+        r"Identity: $X = C_r + A_r + E_r$ holds strictly for both $r=1$ and $r=2$.",
+        fontsize=12,
+        y=0.98,
+    )
+    _save(fig, path)
