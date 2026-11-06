@@ -79,9 +79,10 @@ def run(
         cfg.evaluation.line_free_n_fwhm, grid.channel_width_ghz,
     )
 
-    # 残差 TOD の標準偏差
-    e1_rms_tod = float(np.std(res.iter1.e_tod))
-    e2_rms_tod = float(np.std(res.iter2.e_tod))
+    peak_err1 = abs(float(m1["peak_ratio"]) - 1.0)
+    peak_err2 = abs(float(m2["peak_ratio"]) - 1.0)
+    int_err1 = abs(float(m1["integrated_ratio"]) - 1.0)
+    int_err2 = abs(float(m2["integrated_ratio"]) - 1.0)
 
     summary = {
         "config": cfg.to_dict(),
@@ -97,20 +98,26 @@ def run(
         },
         "first_estimate": {
             **m1,
-            "residual_tod_rms_k": e1_rms_tod,
+            "noise_status": res.iter1.noise_status,
+            "noise_n_valid": res.iter1.noise_n_valid,
             "explained_ratio": [float(x) for x in res.iter1.explained_ratio],
         },
         "second_estimate": {
             **m2,
-            "residual_tod_rms_k": e2_rms_tod,
+            "noise_status": res.iter2.noise_status,
+            "noise_n_valid": res.iter2.noise_n_valid,
             "explained_ratio": [float(x) for x in res.iter2.explained_ratio],
         },
         "comparison_iter2_vs_iter1": {
             "peak_ratio_change": float(m2["peak_ratio"] - m1["peak_ratio"]),
             "integrated_ratio_change": float(m2["integrated_ratio"] - m1["integrated_ratio"]),
             "residual_rms_change_k": float(m2["line_free_residual_rms_k"] - m1["line_free_residual_rms_k"]),
-            "residual_tod_rms_change_k": float(e2_rms_tod - e1_rms_tod),
-            "is_improved": bool(m2["integrated_ratio"] > m1["integrated_ratio"]),
+            "peak_ratio_abs_error_iter1": peak_err1,
+            "peak_ratio_abs_error_iter2": peak_err2,
+            "peak_closer_to_truth": bool(peak_err2 < peak_err1),
+            "integrated_ratio_abs_error_iter1": int_err1,
+            "integrated_ratio_abs_error_iter2": int_err2,
+            "integrated_closer_to_truth": bool(int_err2 < int_err1),
         },
     }
 
@@ -180,19 +187,22 @@ def print_summary(summary: dict) -> None:
           f"2回目={id_info['max_abs_identity_err_iter2_k']:.2e} K (厳密成立: {id_info['is_identity_exact']})")
     print(f"フィードバック U_2 = X - A_1 最大絶対誤差: {id_info['max_abs_u2_feedback_err_k']:.2e} K")
     print("-" * 60)
-    print(f"{'Estimate':<16}{'ピーク比':>10}{'積分強度比':>12}{'残差RMS [K]':>14}{'TOD残差RMS [K]':>16}")
+    print(f"{'Estimate':<16}{'ピーク比':>10}{'積分強度比':>12}{'残差RMS [K]':>14}")
     m1 = summary["first_estimate"]
     m2 = summary["second_estimate"]
     print(f"{'1st estimate':<16}{m1['peak_ratio']:>10.4f}{m1['integrated_ratio']:>12.4f}"
-          f"{m1['line_free_residual_rms_k']:>14.4f}{m1['residual_tod_rms_k']:>16.4f}")
+          f"{m1['line_free_residual_rms_k']:>14.4f}")
     print(f"{'2nd estimate':<16}{m2['peak_ratio']:>10.4f}{m2['integrated_ratio']:>12.4f}"
-          f"{m2['line_free_residual_rms_k']:>14.4f}{m2['residual_tod_rms_k']:>16.4f}")
+          f"{m2['line_free_residual_rms_k']:>14.4f}")
     print("-" * 60)
     cmp = summary["comparison_iter2_vs_iter1"]
     print(f"2回目の変化: ピーク比 {cmp['peak_ratio_change']:+.4f}, "
           f"積分強度比 {cmp['integrated_ratio_change']:+.4f}, "
           f"残差RMS {cmp['residual_rms_change_k']:+.4e} K")
-    print(f"積分強度の改善判定: {'改善' if cmp['is_improved'] else '悪化または不変'}")
+    p_status = "正解に接近" if cmp["peak_closer_to_truth"] else "正解から乖離または不変"
+    i_status = "正解に接近" if cmp["integrated_closer_to_truth"] else "正解から乖離または不変"
+    print(f"ピーク比誤差: |r-1| {cmp['peak_ratio_abs_error_iter1']:.4f} -> {cmp['peak_ratio_abs_error_iter2']:.4f} ({p_status})")
+    print(f"積分強度比誤差: |r-1| {cmp['integrated_ratio_abs_error_iter1']:.4f} -> {cmp['integrated_ratio_abs_error_iter2']:.4f} ({i_status})")
     print("=" * 60)
 
 

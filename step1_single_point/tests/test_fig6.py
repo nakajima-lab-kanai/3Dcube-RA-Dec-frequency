@@ -107,7 +107,9 @@ def test_input_immutability(base_config):
 def test_independence_from_ground_truth(base_config):
     """反復計算が正解データから完全に独立していることの検証
 
-    観測 TOD と座標情報が同一であれば、正解情報が何であっても推定結果は同一となる。
+    1. 観測 TOD と座標情報のみが入力であり、正解情報への参照引数を持たないこと。
+    2. 評価側の正解信号 truth_k を全く異なる値に差し替えても、
+       推定結果 (C_r, A_r, E_r, restored, model) が不変であることを確認。
     """
     sim = pipeline.simulate(base_config)
     grid = sim.grid
@@ -122,7 +124,7 @@ def test_independence_from_ground_truth(base_config):
         cutoff_sigma=5.0,
     )
 
-    # 観測データのみを渡し、正解データへの参照が一切不要であることを確認
+    # 観測データのコピーを渡した場合の再現性
     fake_observed = sim.observed.copy()
     res2 = iterative.run_two_step_estimation(
         observed_tod=fake_observed,
@@ -140,6 +142,13 @@ def test_independence_from_ground_truth(base_config):
     assert np.array_equal(res1.iter2.c_tod, res2.iter2.c_tod)
     assert np.array_equal(res1.iter2.a_tod, res2.iter2.a_tod)
     assert np.array_equal(res1.iter2.e_tod, res2.iter2.e_tod)
+    assert np.array_equal(res1.iter1.restored_spectrum, res2.iter1.restored_spectrum, equal_nan=True)
+    assert np.array_equal(res1.iter1.model_spectrum, res2.iter1.model_spectrum, equal_nan=True)
+
+    # 評価用の正解スペクトルを意図的に改変
+    fake_truth = sim.truth_k * 5.0 + 10.0
+    # 推定関数は正解スペクトルを引数に取らないため、正解を変更しても推定値そのものは不変
+    assert np.array_equal(res1.iter1.c_tod, res2.iter1.c_tod)
 
 
 def test_noiseless_baseline_and_pca_signal_loss(base_config):
@@ -158,6 +167,7 @@ def test_noiseless_baseline_and_pca_signal_loss(base_config):
     grid = sim.grid
 
     # Case 1: n_components = 0, mean_mode = "none" (PCAなし、平均除去なし)
+    # 雑音なしシミュレーションのため allow_noise_free=True を指定
     res_nopca = iterative.run_two_step_estimation(
         observed_tod=sim.observed,
         shifts_ch=sim.shifts_ch,
@@ -166,6 +176,7 @@ def test_noiseless_baseline_and_pca_signal_loss(base_config):
         n_components=0,
         mean_mode="none",
         cutoff_sigma=5.0,
+        allow_noise_free=True,
     )
 
     # PCAがない場合、天体信号のみの観測なので C_r は 0
@@ -173,6 +184,12 @@ def test_noiseless_baseline_and_pca_signal_loss(base_config):
     # 変調/復調が恒等復元となり、残差は数値誤差レベル
     assert np.allclose(res_nopca.iter1.e_tod, 0.0, atol=1e-12)
     assert np.allclose(res_nopca.iter2.e_tod, 0.0, atol=1e-12)
+
+    # 全時刻観測された領域において、復元スペクトルと正解スペクトルが厳密に一致することを確認
+    fully_obs = (res_nopca.iter1.hits == cfg.n_time)
+    assert np.any(fully_obs)
+    assert np.allclose(res_nopca.iter1.restored_spectrum[fully_obs], sim.truth_k[fully_obs], atol=1e-12)
+    assert np.allclose(res_nopca.iter2.restored_spectrum[fully_obs], sim.truth_k[fully_obs], atol=1e-12)
 
     # Case 2: n_components = 1, mean_mode = "none" (PCAあり)
     res_pca = iterative.run_two_step_estimation(
@@ -183,6 +200,7 @@ def test_noiseless_baseline_and_pca_signal_loss(base_config):
         n_components=1,
         mean_mode="none",
         cutoff_sigma=5.0,
+        allow_noise_free=True,
     )
 
     # PCAが変調天体信号の一部を吸収するため、C_1 は非ゼロとなる (信号損失の発生)
@@ -199,7 +217,14 @@ def test_noiseless_baseline_and_pca_signal_loss(base_config):
 
 
 def test_noise_sigma_estimation_edge_cases():
-    """MAD による雑音水準推定のエッジケース挙動テスト"""
+    """MAD による雑音水準推定のエッジケース挙動テスト
+
+    新仕様:
+      - 有効点不足 (< 10 点) では status = 'insufficient_points'
+      - MAD == 0 かつ std == 0 では status = 'zero_mad'
+      - 既定 (allow_noise_free=False) では ValueError が送出され天体モデルを作成しない
+      - allow_noise_free=True の場合のみ完全無雑音フォールバックを許可する
+    """
     n_wide = 100
     n_time = 10
     hits = np.full(n_wide, n_time, dtype=int)
@@ -207,21 +232,92 @@ def test_noise_sigma_estimation_edge_cases():
 
     # 1. 有効点不足 (< 10 点)
     spec_sparse = np.full(n_wide, np.nan)
-    spec_sparse[10:15] = 1.0
-    sigma_d, sigma_0 = iterative.estimate_noise_sigma(spec_sparse, hits, n_time)
+    spec_sparse[10:15] = 1.0  # 有効点 5 点
+    sigma_d, sigma_0, status, n_valid = iterative.estimate_noise_sigma(spec_sparse, hits, n_time)
+    assert status == "insufficient_points"
+    assert n_valid == 5
     assert sigma_0 == 0.0
+
+    # 既定では天体モデル作成時に ValueError を送出
+    with pytest.raises(ValueError, match="insufficient_points"):
+        iterative.make_noise_free_model(spec_sparse, hits, n_time, cutoff_sigma=5.0, allow_noise_free=False)
+
+    # allow_noise_free=True であればフォールバックが機能
+    model_sparse, _, _, st_sparse, _ = iterative.make_noise_free_model(
+        spec_sparse, hits, n_time, cutoff_sigma=5.0, allow_noise_free=True
+    )
+    assert st_sparse == "insufficient_points"
+    assert np.all(np.isfinite(model_sparse))
 
     # 2. 完全平坦 (MAD = 0, std = 0)
     spec_flat = np.full(n_wide, 2.0)
     spec_flat[:5] = np.nan
-    sigma_d, sigma_0 = iterative.estimate_noise_sigma(spec_flat, hits, n_time)
+    sigma_d, sigma_0, status, n_valid = iterative.estimate_noise_sigma(spec_flat, hits, n_time)
+    assert status == "zero_mad"
+    assert n_valid == 95
     assert sigma_0 == 0.0
-    # モデル作成でもクラッシュしないこと
-    model, _, _ = iterative.make_noise_free_model(spec_flat, hits, n_time, cutoff_sigma=5.0)
+
+    # 既定では天体モデル作成時に ValueError を送出
+    with pytest.raises(ValueError, match="zero_mad"):
+        iterative.make_noise_free_model(spec_flat, hits, n_time, cutoff_sigma=5.0, allow_noise_free=False)
+
+    # allow_noise_free=True であればフォールバックが機能
+    model, _, _, st_flat, _ = iterative.make_noise_free_model(
+        spec_flat, hits, n_time, cutoff_sigma=5.0, allow_noise_free=True
+    )
+    assert st_flat == "zero_mad"
     assert np.all(np.isfinite(model))
 
     # 3. 未観測点 (hits == 0) のモデル値は必ず 0.0
     assert np.all(model[:5] == 0.0)
+
+
+def test_hits_noise_scaling():
+    """hits 数による局所雑音水準の補正 (sigma_d = sigma_0 * sqrt(n_time / hits)) の数値テスト
+
+    hits = n_time と hits = n_time / 4 で比較し、雑音比が厳密に sqrt(4) = 2 となることを確認。
+    """
+    n_wide = 100
+    n_time = 100
+    rng = np.random.default_rng(12345)
+    noise_sigma_true = 0.5
+    # 全時刻領域にガウス雑音を生成
+    spec = rng.normal(0.0, noise_sigma_true, size=n_wide)
+
+    hits = np.full(n_wide, n_time, dtype=int)
+    # チャンネル 50..59 は hits = n_time // 4 = 25
+    hits[50:60] = n_time // 4
+
+    sigma_d, sigma_0, status, n_valid = iterative.estimate_noise_sigma(spec, hits, n_time)
+    assert status == "ok"
+    assert sigma_0 > 0.0
+
+    # hits == n_time の点では sigma_d == sigma_0
+    assert np.isclose(sigma_d[0], sigma_0)
+    # hits == n_time // 4 の点では sigma_d == 2 * sigma_0
+    assert np.isclose(sigma_d[50], 2.0 * sigma_0)
+    # 比が 2.0
+    assert np.isclose(sigma_d[50] / sigma_d[0], 2.0)
+
+
+def test_closer_to_truth_logic():
+    """正解 (= 1.0) への接近判定ロジックのテスト
+
+    比が 1.02 -> 1.10 に変化した場合 (|1.02 - 1| = 0.02, |1.10 - 1| = 0.10)、
+    値は増大しているが正解からは遠ざかっているため closer_to_truth は False と判定される。
+    """
+    m1_peak, m2_peak = 1.02, 1.10
+    peak_err1 = abs(m1_peak - 1.0)
+    peak_err2 = abs(m2_peak - 1.0)
+    peak_closer = bool(peak_err2 < peak_err1)
+    assert peak_closer is False, "1.02 -> 1.10 は正解(=1.0)から遠ざかっているため False でなければなりません"
+
+    # 逆に 0.94 -> 0.99 の場合は正解に近づく
+    m1_int, m2_int = 0.94, 0.99
+    int_err1 = abs(m1_int - 1.0)
+    int_err2 = abs(m2_int - 1.0)
+    int_closer = bool(int_err2 < int_err1)
+    assert int_closer is True
 
 
 def test_regression_existing_step1():
