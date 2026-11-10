@@ -1,7 +1,8 @@
 """Taniguchi et al. (2020) Fig. 6 成分推定診断図スクリプト
 
 1点観測の模擬観測データに対し、1回目・2回目の成分推定を実行し、
-診断図 (fig09_fig6_diagnostics.png) および評価値を出力する。
+診断図 (fig09_fig6_diagnostics.png)、復元スペクトル重ね描き
+(fig10_fig6_restored_spectra.png) および評価値を出力する。
 
 使い方:
     python run_fig6.py
@@ -12,15 +13,148 @@ from __future__ import annotations
 
 import argparse
 import json
+import platform
+import subprocess
+import sys
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 
 from fmlo_sim import evaluation, iterative, pipeline, plotting
 from fmlo_sim.config import DEFAULT_CONFIG_PATH, MEAN_MODES, Config, load_config, parse_set_args
+from fmlo_sim.modulation import compute_zigzag_period_samples
 
 HERE = Path(__file__).resolve().parent
+REPO_ROOT = HERE.parent
 DEFAULT_FIG6_CONFIG = HERE / "config" / "fig6_taniguchi2020.yaml"
+
+
+def _get_git_info() -> dict:
+    """gitコミットSHAと未コミット変更の有無を取得。
+
+    失敗時は null と理由を記録する。リポジトリ外やgit未利用でも
+    処理を落とさない。
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, cwd=REPO_ROOT,
+        )
+        if result.returncode != 0:
+            return {
+                "commit_sha": None,
+                "commit_sha_reason": f"git rev-parse 失敗 (rc={result.returncode}): {result.stderr.strip()}",
+            }
+        sha = result.stdout.strip()
+
+        result2 = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True, text=True, cwd=REPO_ROOT,
+        )
+        if result2.returncode != 0:
+            return {
+                "commit_sha": sha,
+                "commit_sha_reason": None,
+                "uncommitted_modified": None,
+                "uncommitted_modified_reason": f"git status 失敗 (rc={result2.returncode}): {result2.stderr.strip()}",
+                "uncommitted_untracked": None,
+                "uncommitted_untracked_reason": f"git status 失敗 (rc={result2.returncode}): {result2.stderr.strip()}",
+            }
+
+        lines = result2.stdout.strip().splitlines() if result2.stdout.strip() else []
+        # git status --porcelain のフォーマット: "XY path"
+        # X=ステージ状態、Y=ワークツリー状態。両方をチェックし、
+        # " M path"（未ステージ変更）も検出する。行頭の空白はstripしない。
+        status_chars = {"M", "A", "D", "R", "C", "T", "U"}
+        modified = any(
+            (len(line) > 0 and line[0] in status_chars) or
+            (len(line) > 1 and line[1] in status_chars)
+            for line in lines
+        )
+        # 未追跡ファイルは別フィールド (uncommitted_untracked) に分離し、
+        # uncommitted_modified の意味を黙って変更しない。
+        untracked = any(line.startswith("??") for line in lines)
+
+        return {
+            "commit_sha": sha,
+            "commit_sha_reason": None,
+            "uncommitted_modified": modified,
+            "uncommitted_modified_reason": None,
+            "uncommitted_untracked": untracked,
+            "uncommitted_untracked_reason": None,
+        }
+    except FileNotFoundError:
+        return {
+            "commit_sha": None,
+            "commit_sha_reason": "git コマンドが見つかりません",
+            "uncommitted_modified": None,
+            "uncommitted_modified_reason": "git コマンドが見つかりません",
+            "uncommitted_untracked": None,
+            "uncommitted_untracked_reason": "git コマンドが見つかりません",
+        }
+    except Exception as exc:  # noqa: BLE001 - git取得失敗は致命ではない
+        return {
+            "commit_sha": None,
+            "commit_sha_reason": f"予期しないエラー: {exc}",
+            "uncommitted_modified": None,
+            "uncommitted_modified_reason": f"予期しないエラー: {exc}",
+            "uncommitted_untracked": None,
+            "uncommitted_untracked_reason": f"予期しないエラー: {exc}",
+        }
+
+
+def _collect_reproducibility_info(
+    cfg: Config,
+    cli_argv: Optional[list],
+    config_path_used: Optional[str],
+    shifts_ch: np.ndarray,
+) -> dict:
+    """実行時の再現性情報を収集する。
+
+    不明な項目は null とその理由を記録する。
+    """
+    git_info = _get_git_info()
+    pattern = cfg.modulation.pattern
+    if pattern == "zigzag":
+        period_samples, period_seconds = compute_zigzag_period_samples(
+            cfg.modulation.half_width_ch,
+            cfg.modulation.zigzag_step_ch,
+            cfg.modulation.dt_s,
+        )
+        if period_samples is None:
+            period_reason = "定数列で非自明な周期なし"
+        else:
+            period_reason = None
+    elif pattern == "random":
+        period_samples, period_seconds, period_reason = (
+            None,
+            None,
+            "randomパターンは周期を持たないため適用外",
+        )
+    else:
+        period_samples, period_seconds, period_reason = (
+            None,
+            None,
+            f"未知の変調パターン: {pattern}",
+        )
+
+    return {
+        "cli_argv": cli_argv,
+        "cli_argv_reason": None if cli_argv is not None else "run()直接呼び出しのため引数列不明",
+        "config_path": config_path_used,
+        "config_path_reason": None if config_path_used is not None else "設定ファイルパス不明",
+        **git_info,
+        "python_version": platform.python_version(),
+        "numpy_version": np.__version__,
+        "shifts_ch_min": int(np.min(shifts_ch)) if shifts_ch.size else None,
+        "shifts_ch_max": int(np.max(shifts_ch)) if shifts_ch.size else None,
+        "configured_half_width_ch": int(cfg.modulation.half_width_ch),
+        "effective_half_width_ch": int(max(abs(int(np.min(shifts_ch))), abs(int(np.max(shifts_ch))))) if shifts_ch.size else None,
+        "zigzag_period_samples": period_samples,
+        "zigzag_period_seconds": period_seconds,
+        "zigzag_period_reason": period_reason,
+    }
 
 
 def run(
@@ -29,6 +163,8 @@ def run(
     cutoff_sigma: float = 5.0,
     zoom_half_width_ch: int = 250,
     make_plots: bool = True,
+    cli_argv: Optional[list] = None,
+    config_path_used: Optional[str] = None,
 ) -> dict:
     """Fig. 6 の 2 ステップ成分推定を実行する
 
@@ -39,6 +175,8 @@ def run(
     cutoff_sigma : sigma-cutoff 閾値 (論文実証解析での典型条件: 5.0)
     zoom_half_width_ch : 拡大診断図の描画半幅 [ch]
     make_plots : 図を保存するかどうか
+    cli_argv : コマンドライン引数列 (sys.argv)。None なら null 相当
+    config_path_used : 実際に読み込んだ設定ファイルパス。None なら null 相当
 
     Returns
     -------
@@ -119,6 +257,12 @@ def run(
             "integrated_ratio_abs_error_iter2": int_err2,
             "integrated_closer_to_truth": bool(int_err2 < int_err1),
         },
+        "reproducibility": _collect_reproducibility_info(
+            cfg,
+            cli_argv,
+            config_path_used,
+            sim.shifts_ch,
+        ),
     }
 
     # 5. NPZ 保存
@@ -173,6 +317,19 @@ def run(
             sim.time_s,
             ch_range=zoom_range,
             title_suffix=f" (Zoom: ch [{zoom_range[0]}, {zoom_range[1]}])",
+        )
+
+        # (c) 復元スペクトルの重ね描き (B-1)
+        plotting.plot_fig6_restored_spectra(
+            outdir / "fig10_fig6_restored_spectra.png",
+            grid.freq_ghz,
+            sim.truth_k,
+            res.iter1.restored_spectrum,
+            res.iter2.restored_spectrum,
+            res.iter1.hits,
+            len(sim.time_s),
+            cfg.source.center_freq_ghz,
+            cfg.source.line_fwhm_kms,
         )
 
     return summary
@@ -248,6 +405,8 @@ def main():
         outdir,
         cutoff_sigma=args.cutoff_sigma,
         zoom_half_width_ch=args.zoom_half_width_ch,
+        cli_argv=sys.argv,
+        config_path_used=str(config_path),
     )
     print_summary(summary)
     print(f"出力先: {outdir.resolve()}")

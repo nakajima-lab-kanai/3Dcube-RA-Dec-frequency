@@ -4,20 +4,23 @@
 # 
 # 変更理由の記録:
 # - source.peak_k: 1.0 -> 5.0 K
-#   (理由: 論文 Fig. 6 および §3.2 では「strong line emission」が想定されており、
-#    熱雑音 (Tsys 200 K) および大気変動 (rms 1 K) に対し、復調後に theta_cutoff = 5.0 sigma
-#    を明確に超えてモデル化され、PCA による天体信号吸収と 2 回目のフィードバックによる
-#    改善効果を明瞭に検証できるようにするため。150 GHz 帯の周波数は維持。)
-# - removal.n_components: 1 (大気の共通時間変動の第 1 主成分を除去)
+#   (理由: 本研究側の検証用選択。論文が指定した5 Kではなく、Fig. 6 および §3.2 で
+#    想定されている「strong line emission」条件を模擬し、theta_cutoff = 5.0 sigma
+#    を超える天体成分を安定してモデル化・検証するための検証用パラメータ。150 GHz 帯は維持。)
+# - modulation.zigzag_step_ch: 10 -> 20 ch
+#   (理由: 論文 §4.1 等の実証観測で用いられた 10 MHz ステップに近づけるための設定。
+#    現在のチャンネル幅 0.48828125 MHz のもとで 20 ch = 9.765625 MHz であり、
+#    論文の 10 MHz に対して約 -2.34% の「整数チャンネル制約による近似」である。)
+# - removal.n_components: 1 (大気の共通時間変動の第 1 主成分を除去。要確認: 仮の値)
 # - removal.mean_mode: none (原点まわり PCA。channel_mean への切替も CLI で可能)
 
 seed: 20261005
 
 source:
-  sigma_arcsec: 50.0        # 天体の空間サイズ。ガウシアンの sigma [arcsec]
-  line_fwhm_kms: 50.0       # 輝線幅。速度の FWHM [km/s]
+  sigma_arcsec: 50.0        # 天体の空間サイズ。ガウシアンの sigma [arcsec] (要確認: 仮の値)
+  line_fwhm_kms: 50.0       # 輝線幅。速度の FWHM [km/s] (要確認: 仮の値)
   center_freq_ghz: 150.0    # 輝線の中心周波数 [GHz] (150 GHz 帯を維持)
-  peak_k: 5.0               # ピーク強度 [K] (Fig. 6 の強輝線条件に設定。元は 1.0 K)
+  peak_k: 5.0               # ピーク強度 [K] (本研究での検証用選択。論文指定値ではなく強輝線検証用)
   center_ra_arcsec: 0.0
   center_dec_arcsec: 0.0
 
@@ -31,33 +34,33 @@ pointing:
   dec_arcsec: null
 
 spectrometer:
-  n_channels: 4096          # SAM45 想定
-  channel_width_mhz: 0.48828125  # 2000 MHz / 4096 ch
+  n_channels: 4096          # ユーザー採用方針 (SAM45 想定、公式仕様の出典記録は未確認)
+  channel_width_mhz: 0.48828125  # 2000 MHz / 4096 ch (要確認: 仮の値)
   center_freq_ghz: 150.0
 
 modulation:
   pattern: zigzag           # ジグザグ変調
   dt_s: 0.1                 # サンプリング 0.1 s
-  half_width_ch: 150        # 変調半幅 +-150 ch
-  zigzag_step_ch: 10        # 1 サンプルあたり 10 ch シフト
+  half_width_ch: 150        # 変調半幅 +-150 ch (帯域換算: +-73.24 MHz。要確認: 仮の値)
+  zigzag_step_ch: 20        # 1 サンプルあたり 20 ch シフト (20 ch = 9.765625 MHz、論文 10 MHz に対し約 -2.34% の近似)
 
 observation:
-  duration_s: 60.0          # 60 秒 (600 サンプル)
+  duration_s: 60.0          # 60 秒 (600 サンプル) (要確認: 仮の値)
 
 noise:
   thermal:
     enabled: true
-    tsys_k: 200.0
+    tsys_k: 200.0           # 要確認: 仮の値
   atmosphere:
     enabled: true
     model: laminar
-    alpha: 1.0
-    rms_k: 1.0
-    offset_k: 0.0
-    slope_frac: 0.1
+    alpha: 1.0              # 要確認: 仮の値
+    rms_k: 1.0              # 要確認: 仮の値
+    offset_k: 0.0           # 要確認: 仮の値
+    slope_frac: 0.1         # 要確認: 仮の値
 
 removal:
-  n_components: 1
+  n_components: 1           # 要確認: 仮の値
   mean_mode: none           # none または channel_mean
 
 evaluation:

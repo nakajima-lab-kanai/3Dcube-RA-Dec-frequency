@@ -15,12 +15,15 @@ from __future__ import annotations
 
 import copy
 from pathlib import Path
+import subprocess
 
 import numpy as np
 import pytest
 
 from fmlo_sim import iterative, modulation, pipeline, removal
 from fmlo_sim.config import DEFAULT_CONFIG_PATH, load_config
+from fmlo_sim.modulation import compute_zigzag_period_samples
+from run_fig6 import _get_git_info
 
 HERE = Path(__file__).resolve().parent
 CONFIG_PATH = HERE.parent / "config" / "fig6_taniguchi2020.yaml"
@@ -331,3 +334,147 @@ def test_regression_existing_step1():
     assert np.isclose(r_none["line_free_residual_rms_k"], 0.0394, atol=1e-3)
     assert np.isclose(r_none["peak_ratio"], 0.9876, atol=1e-3)
     assert np.isclose(r_none["integrated_ratio"], 0.9336, atol=1e-3)
+
+
+def test_zigzag_period_normal():
+    """zigzag パターンで半幅 > 0 のとき、離散周期が計算されること (Fig.6 設定値照合)."""
+    cfg = load_config(CONFIG_PATH)
+    # fig6_taniguchi2020.yaml: half_width_ch=150, zigzag_step_ch=20, dt_s=0.1
+    # 期待: 4 * 150 / gcd(600, 20) = 30 samples, 30 * 0.1 = 3.0 s
+    period_samples, period_seconds = compute_zigzag_period_samples(
+        cfg.modulation.half_width_ch,
+        cfg.modulation.zigzag_step_ch,
+        cfg.modulation.dt_s,
+    )
+    assert period_samples == 30.0
+    assert period_seconds == 3.0
+
+
+def test_zigzag_period_step10():
+    """ステップ10: 4*150/gcd(600,10) = 60 samples, 6.0 s."""
+    period_samples, period_seconds = compute_zigzag_period_samples(150, 10, 0.1)
+    assert period_samples == 60.0
+    assert period_seconds == 6.0
+
+
+def test_zigzag_period_step20():
+    """ステップ20: 4*150/gcd(600,20) = 30 samples."""
+    period_samples, period_seconds = compute_zigzag_period_samples(150, 20, 0.1)
+    assert period_samples == 30.0
+    assert period_seconds == 3.0
+
+
+def test_zigzag_period_step7():
+    """ステップ7: 4*150/gcd(600,7) = 600 samples (600と7は互いに素)."""
+    period_samples, period_seconds = compute_zigzag_period_samples(150, 7, 0.1)
+    assert period_samples == 600.0
+    assert period_seconds == 60.0
+
+
+def test_zigzag_period_zero_half_width():
+    """半幅0の定数列では周期が None になること."""
+    period_samples, period_seconds = compute_zigzag_period_samples(0, 10, 0.1)
+    assert period_samples is None
+    assert period_seconds is None
+
+
+def test_zigzag_period_constant_fold():
+    """半幅150・ステップ300: 出力は全て0の定数列 → None."""
+    period_samples, period_seconds = compute_zigzag_period_samples(150, 300, 0.1)
+    assert period_samples is None
+    assert period_seconds is None
+
+
+def test_zigzag_period_verify_with_make_shift_pattern():
+    """make_shift_pattern が生成した列と周期を照合する."""
+    from fmlo_sim.modulation import make_shift_pattern
+
+    # step=10: 周期60。2周期分(120サンプル)を生成して繰り返しを確認。
+    shifts = make_shift_pattern("zigzag", 120, 150, 10)
+    assert np.array_equal(shifts[:60], shifts[60:120])
+
+    # step=7: 周期600。1周期分(600サンプル)を生成。
+    shifts7 = make_shift_pattern("zigzag", 600, 150, 7)
+    assert len(shifts7) == 600
+    # 1周期目と2周期目(600-1199)を比較
+    shifts7_2 = make_shift_pattern("zigzag", 1200, 150, 7)
+    assert np.array_equal(shifts7, shifts7_2[600:1200])
+
+
+@pytest.mark.parametrize(
+    ("status_stdout", "expected_modified", "expected_untracked"),
+    [
+        ("", False, False),  # clean
+        (" M path/to/file.py", True, False),  # 未ステージ変更
+        ("M  path/to/file.py", True, False),  # ステージ済み変更
+        ("MM path/to/file.py", True, False),  # 両方の変更
+        (" D path/to/file.py", True, False),  # 未ステージ削除
+        ("UU path/to/file.py", True, False),  # 競合
+        ("?? path/to/new_file.py", False, True),  # 未追跡のみ
+        (" M path/to/file.py\n?? path/to/new_file.py", True, True),  # 変更と未追跡の混在
+    ],
+)
+def test_get_git_info_status_cases(monkeypatch, status_stdout, expected_modified, expected_untracked):
+    """git status の各出力パターンに対する dirty / untracked 判定の検証."""
+    def fake_run(cmd, capture_output=True, text=True, cwd=None):
+        if cmd == ["git", "rev-parse", "HEAD"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="abcdef1234567890\n", stderr="")
+        if cmd == ["git", "status", "--porcelain"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout=status_stdout, stderr="")
+        raise AssertionError(f"Unexpected command: {cmd}")
+
+    monkeypatch.setattr("run_fig6.subprocess.run", fake_run)
+    info = _get_git_info()
+    assert info["commit_sha"] == "abcdef1234567890"
+    assert info["commit_sha_reason"] is None
+    assert info["uncommitted_modified"] is expected_modified
+    assert info["uncommitted_modified_reason"] is None
+    assert info["uncommitted_untracked"] is expected_untracked
+    assert info["uncommitted_untracked_reason"] is None
+
+
+def test_get_git_info_not_found(monkeypatch):
+    """git 未導入 (FileNotFoundError) の場合のフォールバック検証."""
+    def fake_run(*args, **kwargs):
+        raise FileNotFoundError("git not found")
+
+    monkeypatch.setattr("run_fig6.subprocess.run", fake_run)
+    info = _get_git_info()
+    assert info["commit_sha"] is None
+    assert "git コマンドが見つかりません" in info["commit_sha_reason"]
+    assert info["uncommitted_modified"] is None
+    assert "git コマンドが見つかりません" in info["uncommitted_modified_reason"]
+    assert info["uncommitted_untracked"] is None
+    assert "git コマンドが見つかりません" in info["uncommitted_untracked_reason"]
+
+
+def test_get_git_info_rev_parse_failure(monkeypatch):
+    """git rev-parse 失敗時の検証 (cleanと誤記録されないこと)."""
+    def fake_run(cmd, capture_output=True, text=True, cwd=None):
+        if cmd == ["git", "rev-parse", "HEAD"]:
+            return subprocess.CompletedProcess(cmd, 128, stdout="", stderr="fatal: not a git repository")
+        raise AssertionError(f"Unexpected command: {cmd}")
+
+    monkeypatch.setattr("run_fig6.subprocess.run", fake_run)
+    info = _get_git_info()
+    assert info["commit_sha"] is None
+    assert "git rev-parse 失敗" in info["commit_sha_reason"]
+
+
+def test_get_git_info_status_failure(monkeypatch):
+    """git status 失敗時の検証 (cleanと誤記録されずnullと理由が返ること)."""
+    def fake_run(cmd, capture_output=True, text=True, cwd=None):
+        if cmd == ["git", "rev-parse", "HEAD"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="abcdef1234567890\n", stderr="")
+        if cmd == ["git", "status", "--porcelain"]:
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="error: broken index")
+        raise AssertionError(f"Unexpected command: {cmd}")
+
+    monkeypatch.setattr("run_fig6.subprocess.run", fake_run)
+    info = _get_git_info()
+    assert info["commit_sha"] == "abcdef1234567890"
+    assert info["commit_sha_reason"] is None
+    assert info["uncommitted_modified"] is None
+    assert "git status 失敗" in info["uncommitted_modified_reason"]
+    assert info["uncommitted_untracked"] is None
+    assert "git status 失敗" in info["uncommitted_untracked_reason"]

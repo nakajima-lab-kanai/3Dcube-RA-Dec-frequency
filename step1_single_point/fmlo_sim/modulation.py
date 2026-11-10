@@ -6,6 +6,8 @@ np.roll のような循環シフトは使わない(端の回り込みを避け�
 """
 from __future__ import annotations
 
+from math import gcd
+
 import numpy as np
 
 
@@ -74,3 +76,39 @@ def demodulate(tod, shifts_ch, start0, n_wide):
     spectrum = np.full(n_wide, np.nan)
     np.divide(total, hits, out=spectrum, where=hits > 0)
     return spectrum, hits
+
+
+def compute_zigzag_period_samples(half_width_ch: int, zigzag_step_ch: int, dt_s: float):
+    """zigzag 変調の出力系列の最小反復周期をサンプル数と秒で返す。
+
+    make_shift_pattern の生成式 pos = t * step,
+    shift = a - |(pos + a) % (4*a) - 2*a| に基づき、
+    内部位相 pos の循環周期 4*a / gcd(4*a, step) を導出し、
+    その1周期分の出力列から最小反復周期を求める。
+
+    返り値:
+      period_samples : 出力系列の最小反復周期 [サンプル] (定数列なら None)
+      period_seconds : period_samples * dt_s [秒] (定数列なら None)
+
+    半幅 0 の定数列、および折り畳みで定数列になるケースでは
+    非自明な周期を持たないため (None, None) を返す。
+    """
+    a = int(half_width_ch)
+    step = int(zigzag_step_ch)
+    if a == 0:
+        return None, None
+    # 内部位相 pos = t * step の循環周期: 4*a が step の倍数になる最小の t
+    internal_period = 4 * a // gcd(4 * a, step)
+    # 1周期分の出力列を生成
+    ts = np.arange(internal_period)
+    pos = ts * step
+    shifts = a - np.abs((pos + a) % (4 * a) - 2 * a)
+    # internal_period の約数の中で最小の反復周期を探す
+    for p in range(1, internal_period + 1):
+        if internal_period % p == 0:
+            if np.all(shifts == np.tile(shifts[:p], internal_period // p)):
+                if p == 1:
+                    # 定数列：非自明な周期なし
+                    return None, None
+                return p, p * float(dt_s)
+    return internal_period, internal_period * float(dt_s)

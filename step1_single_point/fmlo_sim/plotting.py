@@ -298,7 +298,10 @@ def plot_fig6_diagnostics(path, result, time_s, ch_range=None, title_suffix=""):
     e_abs_max = max(float(np.percentile(np.abs(resids), 99.5)), 0.1)
     v3_min, v3_max = -e_abs_max, e_abs_max
 
-    fig, axs = plt.subplots(2, 4, figsize=(18, 8.5), sharex=True, sharey=True)
+    # B-3: layout engine を "none" に設定して subplots_adjust を有効化し、
+    # 全体タイトルと上段パネルタイトルの重なりを防ぐ。
+    fig, axs = plt.subplots(2, 4, figsize=(18, 8.5), sharex=True, sharey=True, layout="none")
+    fig.subplots_adjust(top=0.88)
 
     grid_data = [
         # Row 1: 1st estimate
@@ -341,5 +344,93 @@ def plot_fig6_diagnostics(path, result, time_s, ch_range=None, title_suffix=""):
         r"Identity: $X = C_r + A_r + E_r$ holds strictly for both $r=1$ and $r=2$.",
         fontsize=12,
         y=0.98,
+    )
+    _save(fig, path)
+
+
+def plot_fig6_restored_spectra(
+    path,
+    freq_ghz,
+    truth_k,
+    restored1_k,
+    restored2_k,
+    hits,
+    n_time,
+    center_freq_ghz,
+    line_fwhm_kms,
+):
+    """Fig. 6 の 1回目・2回目の復元スペクトルと正解スペクトルの重ね描き
+
+    2×2 レイアウト:
+      上段: 全範囲 (左) と輝線付近の拡大 (右) — 正解・1回目・2回目の重ね描き
+      下段: 同じ範囲で 復元 − 正解 の残差
+
+    評価時のみ正解を参照する。hits == n_time の領域のみ描画する。
+
+    Parameters
+    ----------
+    path : 出力先パス
+    freq_ghz : (n_wide,) sky 周波数 [GHz]
+    truth_k : (n_wide,) 正解スペクトル [K]
+    restored1_k : (n_wide,) 1回目の復元スペクトル [K]
+    restored2_k : (n_wide,) 2回目の復元スペクトル [K]
+    hits : (n_wide,) 観測ヒット数
+    n_time : 時間サンプル数
+    center_freq_ghz : 輝線中心周波数 [GHz]
+    line_fwhm_kms : 輝線幅 FWHM [km/s]
+    """
+    valid = hits == n_time
+    freq_v = freq_ghz[valid]
+    truth_v = truth_k[valid]
+    r1_v = restored1_k[valid]
+    r2_v = restored2_k[valid]
+    res1_v = r1_v - truth_v
+    res2_v = r2_v - truth_v
+
+    fwhm_ghz = center_freq_ghz * line_fwhm_kms / 299792.458
+    zoom = (center_freq_ghz - 4 * fwhm_ghz, center_freq_ghz + 4 * fwhm_ghz)
+
+    fig, axs = plt.subplots(2, 2, figsize=(14, 9))
+
+    # 上段: 正解・1回目・2回目の重ね描き
+    for col, (ax, xlim, title) in enumerate(zip(
+        axs[0],
+        [None, zoom],
+        ["Restored vs ground-truth spectrum (fully covered range)",
+         "Zoom on the line"],
+    )):
+        ax.plot(freq_v, truth_v, color=INK, linewidth=1.6, label="Ground truth", zorder=3)
+        ax.plot(freq_v, r1_v, color=BLUE, linewidth=1.0, label="1st estimate", alpha=0.85)
+        ax.plot(freq_v, r2_v, color=ORANGE, linewidth=1.0, label="2nd estimate", alpha=0.85)
+        ax.set_title(title)
+        ax.set_ylabel("Intensity (K)")
+        ax.set_xlabel("Sky frequency (GHz)")
+        ax.grid(True)
+        ax.legend(loc="upper right")
+        if xlim is not None:
+            ax.set_xlim(*xlim)
+
+    # 下段: 残差
+    for col, (ax, xlim, title) in enumerate(zip(
+        axs[1],
+        [None, zoom],
+        ["Residual (restored − ground truth), full range",
+         "Residual (restored − ground truth), zoom on the line"],
+    )):
+        ax.plot(freq_v, res1_v, color=BLUE, linewidth=1.0, label="1st estimate", alpha=0.85)
+        ax.plot(freq_v, res2_v, color=ORANGE, linewidth=1.0, label="2nd estimate", alpha=0.85)
+        ax.axhline(0, color=INK, linewidth=0.8)
+        ax.set_title(title)
+        ax.set_ylabel("Residual (K)")
+        ax.set_xlabel("Sky frequency (GHz)")
+        ax.grid(True)
+        ax.legend(loc="upper right")
+        if xlim is not None:
+            ax.set_xlim(*xlim)
+
+    fig.suptitle(
+        "Taniguchi et al. (2020) Fig. 6: Restored spectra comparison\n"
+        "(hits == n_time region only, ground truth used for evaluation only)",
+        fontsize=12,
     )
     _save(fig, path)
