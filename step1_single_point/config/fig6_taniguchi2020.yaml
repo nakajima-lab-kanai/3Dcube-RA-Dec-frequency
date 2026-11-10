@@ -8,7 +8,7 @@
 #    想定されている「strong line emission」条件を模擬し、theta_cutoff = 5.0 sigma
 #    を超える天体成分を安定してモデル化・検証するための検証用パラメータ。150 GHz 帯は維持。)
 # - modulation.zigzag_step_ch: 10 -> 20 ch
-#   (理由: 論文 §4.1 等の実証観測で用いられた 10 MHz ステップに近づけるための設定。
+#   (理由: 論文 §4.4 ブランクスカイ観測で用いられた 10 MHz ステップに近づけるための設定。
 #    現在のチャンネル幅 0.48828125 MHz のもとで 20 ch = 9.765625 MHz であり、
 #    論文の 10 MHz に対して約 -2.34% の「整数チャンネル制約による近似」である。)
 # - removal.n_components: 1 (大気の共通時間変動の第 1 主成分を除去。要確認: 仮の値)
@@ -34,8 +34,8 @@ pointing:
   dec_arcsec: null
 
 spectrometer:
-  n_channels: 4096          # ユーザー採用方針 (SAM45 想定、公式仕様の出典記録は未確認)
-  channel_width_mhz: 0.48828125  # 2000 MHz / 4096 ch (要確認: 仮の値)
+  n_channels: 4096          # SAM45 想定。論文 §4.2 の取得時設定 (4096 ch, 2000 MHz) に対応 (解析時は §4.3 で 2048 ch に縮約、本実装は 4096 ch 維持)
+  channel_width_mhz: 0.48828125  # 2000 MHz / 4096 ch (論文 §4.2 の 0.48828 MHz と一致)
   center_freq_ghz: 150.0
 
 modulation:
