@@ -1,0 +1,59 @@
+# Taniguchi et al. (2020, PASJ 72, 2) Fig. 6 再現用設定
+#
+# 論文本文は Fig. 6 の模擬条件を数値で与えていない(「zig-zag FM の模擬 timestream、
+# 帯域中央付近に強い輝線」のみ)。以下の値は arXiv:1911.02574 のソースに含まれる
+# flowchart.pdf の埋め込みパネル画像(720x720, viridis)を数値に戻して決めた。
+# 出典の区分:
+#   [図・厳密]  図から一意に読める値
+#   [図・測定]  図から測定した値(誤差あり)
+#   [論文]      論文本文の記述
+#   [FMFlow]    著者パッケージ FMFlow v0.2.7 (2019-09) の実装
+#   [仮定]      図・本文から決まらず、仮定または当てはめで決めた値
+#
+# 強度の単位は、論文図の 2 回目 E^nc パネル(輝線なし領域)の標準偏差。
+
+seed: 2020                  # [仮定] 論文の乱数列は復元できないため、雑音の模様は一致しない
+
+spectrometer:
+  n_channels: 2048          # [仮定] 図からは D > 720 としか分からない。§4.3 の 2ch ビニング後の値を採用
+  channel_width_mhz: 0.9765625  # [仮定] 同上 (2000 MHz / 2048)。図の再現には使わない
+  n_time: 100               # [図・厳密] パネルの行ブロック数
+  dt_s: 0.1                 # [論文] §4.2 (10 Hz)。図の再現には使わない
+
+fm:
+  step_ch: 23               # [図・測定] 8.169 px/sample × 2048/720 = 23.24 ch → 整数化 (約 -1%)
+  n_steps: 24               # [図・厳密] 0..24..0、折り返し点は 2 サンプル続く、周期 50 サンプル
+  phase: 36                 # [図・厳密] 先頭サンプルの位置
+
+line:
+  amplitude: 5.0            # [図・測定] 2 回目の T^ast のガウシアン当てはめ 5.00 ± 0.02
+  center_ch: 1321.2         # [図・測定] ξ̄=0 のときの位置 465.18 px (=1324.1 ch) から、FM step の整数化による
+                            #            ずれを全時刻で均すため -2.9 ch (-1 px) 補正
+  fwhm_ch: 36.52            # [図・測定] 12.84 ± 0.07 px
+
+correlated:
+  profile: digitized        # [図・測定] 全チャンネル共通の時間変動。2 回目の T^cor から読み取り
+  profile_file: data/taniguchi2020_fig6_correlated_profile.csv
+  constant_level: 0.0
+  scale: 1.0
+
+noise:
+  sigma: 1.06               # [図・測定] 強度の単位は「論文図の E^nc の標準偏差」。図はカラーレンジ下限で
+                            #            頭打ちになっており、頭打ち後の標準偏差が 1.00 になる値が 1.06
+                            #            (論文 §2.4 の E^nc ~ N(0, I) に相当)
+
+reduction:
+  n_components: [4, 1]      # [仮定] パネルへの当てはめ。1 回目 K=4、2 回目 K=1 が最もよく合う
+                            #        (同じ K を両方に使うと 2 回目の T^cor に輝線が残りすぎる)
+  centering: true           # [FMFlow] 時間平均を引いて PCA し、平均を戻す
+  cutoff_sigma: 5.0         # [論文] §4.3 θ_cutoff = 5
+  two_sided_cutoff: false   # [FMFlow] 片側判定。図の T^ast に負値がないことと整合 (論文式は |s|)
+  n_iterations: 2           # [図・厳密]
+  convergence_eps: null     # [論文] §4.3 では 0.05。指定すると収束まで反復する
+  max_iterations: 50
+
+plot:
+  vmin: -1.67               # [図・測定] 全パネル共通のカラーレンジ
+  vmax: 5.68
+  cmap: viridis
+  panel_px: 720             # [図・厳密]
