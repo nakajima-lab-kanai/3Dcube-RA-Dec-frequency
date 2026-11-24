@@ -82,3 +82,16 @@ removal:
 
 evaluation:
   line_free_n_fwhm: 2.0
+
+# 従来の OTF(LO 固定・OFF 点を引く)の比較観測。run_step2_otf_vs_fmlo.py だけが使う
+otf:
+  off_interval_rows: 1      # 要確認(1 行 = 20 s ごとに OFF)
+  off_integration_s: 5.0    # 要確認
+  off_interpolation: linear # 前後の OFF を時間で線形補間
+  baseline_order: 1         # 輝線のないチャンネル(±2 FWHM の外)で 1 次式を引く。-1 なら引かない
+
+# 積分強度マップの積分範囲(輝線中心から ± 何 FWHM)。run_step2_otf_vs_fmlo.py だけが使う
+# 論文 Fig. 14 は単一スキャン 50.5 km/s 幅、basket weave 30.5 km/s 幅(約 0.6 倍)
+comparison:
+  single_half_width_fwhm: 1.0
+  basket_half_width_fwhm: 0.6

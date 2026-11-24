@@ -31,6 +31,7 @@ REMOVAL_METHODS = ("simple_pca", "iterative_pca")
 SCAN_MODES = ("single_point", "x_scan", "y_scan", "basket_weave")
 MAPPING_KERNELS = ("gaussian",)
 BASKET_WEAVE_METHODS = ("weighted_mean", "fourier")
+OFF_INTERPOLATIONS = ("linear", "nearest")
 
 
 @dataclass
@@ -170,6 +171,24 @@ class MappingConfig:
 
 
 @dataclass
+class OtfConfig:
+    """従来の OTF(変調なし・OFF 点を引く)の比較観測の設定。run_step2_otf_vs_fmlo.py だけが使う"""
+
+    off_interval_rows: int = 1         # OFF 点を何行ごとに観測するか 要確認
+    off_integration_s: float = 5.0     # 1 回の OFF 点の積分時間 [s] 要確認
+    off_interpolation: str = "linear"  # linear(前後の OFF を時間で線形補間)/ nearest
+    baseline_order: int = 1            # 輝線のないチャンネルで引く多項式ベースラインの次数(-1 なら引かない)
+
+
+@dataclass
+class ComparisonConfig:
+    """OTF と FMLO の比較図の積分範囲(輝線中心から ± 何 FWHM)。run_step2_otf_vs_fmlo.py だけが使う"""
+
+    single_half_width_fwhm: float = 1.0   # 単一スキャン(論文 Fig. 14 は 50.5 km/s 幅)
+    basket_half_width_fwhm: float = 0.6   # basket weave(論文は 30.5 km/s 幅 = 約 0.6 倍)
+
+
+@dataclass
 class Config:
     seed: int
     source: SourceConfig
@@ -184,6 +203,8 @@ class Config:
     telescope: TelescopeConfig = dataclasses.field(default_factory=TelescopeConfig)
     scan: ScanConfig = dataclasses.field(default_factory=ScanConfig)
     mapping: MappingConfig = dataclasses.field(default_factory=MappingConfig)
+    otf: OtfConfig = dataclasses.field(default_factory=OtfConfig)
+    comparison: ComparisonConfig = dataclasses.field(default_factory=ComparisonConfig)
 
     @property
     def n_time(self) -> int:
@@ -324,6 +345,13 @@ def validate(cfg: Config) -> None:
         raise ValueError(f"mapping.basket_weave_method は {BASKET_WEAVE_METHODS} のいずれかです")
     if not (m.grid_pixel_arcsec > 0 and m.kernel_fwhm_arcsec > 0 and m.kernel_support_fwhm > 0):
         raise ValueError("mapping.grid_pixel_arcsec / kernel_fwhm_arcsec / kernel_support_fwhm は正の値です")
+    o = cfg.otf
+    if o.off_interval_rows < 1 or not o.off_integration_s > 0 or o.baseline_order < -1:
+        raise ValueError("otf.off_interval_rows >= 1、off_integration_s > 0、baseline_order >= -1 が必要です")
+    if not (cfg.comparison.single_half_width_fwhm > 0 and cfg.comparison.basket_half_width_fwhm > 0):
+        raise ValueError("comparison の積分範囲は正の値です")
+    if o.off_interpolation not in OFF_INTERPOLATIONS:
+        raise ValueError(f"otf.off_interpolation は {OFF_INTERPOLATIONS} のいずれかです")
     validate_observing(cfg.spectrometer, cfg.modulation, cfg.noise, cfg.n_time)
 
 

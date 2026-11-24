@@ -636,3 +636,71 @@ def plot_scan_center_spectrum(path, freq_ghz, valid, truth, reference, restored:
     if zoom_ghz is not None:
         axs[1].set_xlim(*zoom_ghz)
     _save(fig, path)
+
+
+# ---------------------------------------------------------------------------
+# 従来 OTF と FMLO の比較(Taniguchi et al. 2020 Fig. 14 の形式)
+# ---------------------------------------------------------------------------
+
+def _sky_axes(ax, ra_axis, dec_axis):
+    """RA を東が左(論文と同じ向き)にする"""
+    ext = _map_extent(ra_axis, dec_axis)
+    ax.set_xlim(ext[1], ext[0])
+    ax.set_ylim(ext[2], ext[3])
+    ax.set_xlabel("Relative RA (arcsec)")
+    ax.set_ylabel("Relative Dec (arcsec)")
+
+
+def plot_otf_vs_fmlo(path, maps: dict, ra_axis, dec_axis, row_labels: dict, vmax=None):
+    """積分強度マップを行 = スキャン(x / y / basket weave)、列 = OTF / FMLO で並べる
+
+    maps : {('OTF', 'x_scan'): mom0, ('FMLO', 'x_scan'): mom0, ...} [K km/s]
+    row_labels : {'x_scan': 'x-scan', ...}(パネル内の文字)。全パネル共通のカラーレンジ
+    """
+    rows = list(row_labels)
+    cols = ["OTF", "FMLO"]
+    if vmax is None:
+        vmax = max(float(np.nanmax(m)) for m in maps.values())
+    fig, axs = plt.subplots(len(rows), 2, figsize=(9.6, 4.2 * len(rows) + 0.8), squeeze=False)
+    ext = _map_extent(ra_axis, dec_axis)
+    for i, r in enumerate(rows):
+        for j, c in enumerate(cols):
+            ax = axs[i, j]
+            im = ax.imshow(maps[(c, r)].T, origin="lower", cmap="viridis", vmin=0, vmax=vmax, extent=ext,
+                           interpolation="nearest")
+            _sky_axes(ax, ra_axis, dec_axis)
+            ax.text(0.04, 0.96, f"{c}\n{row_labels[r]}", transform=ax.transAxes, va="top", ha="left",
+                    color="white", fontsize=12)
+            if i == 0:
+                ax.set_title(f"Integrated intensity ({c})")
+    for j in range(2):
+        fig.colorbar(im, ax=axs[:, j], orientation="horizontal", location="bottom", shrink=0.9, aspect=30,
+                     label="Integrated intensity (K km/s)")
+    _save(fig, path)
+
+
+def plot_otf_vs_fmlo_residuals(path, maps: dict, references: dict, ra_axis, dec_axis, row_labels: dict,
+                               stats: dict = None):
+    """行ごとに 基準(雑音なし)/ OTF − 基準 / FMLO − 基準 の積分強度マップ"""
+    rows = list(row_labels)
+    fig, axs = plt.subplots(len(rows), 3, figsize=(15.0, 4.6 * len(rows)), squeeze=False)
+    ext = _map_extent(ra_axis, dec_axis)
+    vmax = max(float(np.nanmax(references[r])) for r in rows)
+    resid = {k: maps[k] - references[k[1]] for k in maps}
+    rmax = max(float(np.nanpercentile(np.abs(v), 99.5)) for v in resid.values()) or 1.0
+    for i, r in enumerate(rows):
+        im = axs[i, 0].imshow(references[r].T, origin="lower", cmap="viridis", vmin=0, vmax=vmax, extent=ext)
+        axs[i, 0].set_title(f"{row_labels[r]}: reference (noise-free signal)")
+        fig.colorbar(im, ax=axs[i, 0], label="Integrated intensity (K km/s)")
+        for j, c in enumerate(["OTF", "FMLO"], start=1):
+            im = axs[i, j].imshow(resid[(c, r)].T, origin="lower", cmap=CMAP_DIV, vmin=-rmax, vmax=rmax,
+                                  extent=ext)
+            tag = ""
+            if stats and (c, r) in stats:
+                s = stats[(c, r)]
+                tag = f"\nresidual RMS {s['mom0_residual_rms_kkms']:.3g} K km/s, flux {s['flux_ratio']:.3f}"
+            axs[i, j].set_title(f"{row_labels[r]}: {c} − reference{tag}")
+            fig.colorbar(im, ax=axs[i, j], label="Residual (K km/s)")
+        for ax in axs[i]:
+            _sky_axes(ax, ra_axis, dec_axis)
+    _save(fig, path)
