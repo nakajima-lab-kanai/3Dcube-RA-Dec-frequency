@@ -1,0 +1,71 @@
+# 段階 2-A「輝線幅スイープ」の設定(run_step2_sweep.py)
+# 基本は config/default.yaml と同じ 1 点観測。sweep セクションの値の全組み合わせを実行する。
+# 「要確認」は根拠を確認できていない仮の値(README の一覧を参照)。
+
+seed: 20261005
+
+# スイープする値(全組み合わせ)。ここ以外のキーは各条件で共通
+sweep:
+  source.line_fwhm_kms: [50.0, 100.0, 200.0]       # 輝線幅 [km/s]
+  modulation.half_width_ch: [150, 300]             # 変調の半幅 [ch]
+  removal.method: [simple_pca, iterative_pca]
+
+source:
+  sigma_arcsec: 50.0
+  line_fwhm_kms: 50.0       # sweep で上書きする
+  center_freq_ghz: 150.0
+  peak_k: 1.0               # 要確認(仮の値)
+  center_ra_arcsec: 0.0
+  center_dec_arcsec: 0.0
+
+cube:
+  half_extent_arcsec: 200.0
+  pixel_arcsec: 10.0
+  margin_ch: 50
+
+pointing:
+  ra_arcsec: null
+  dec_arcsec: null
+
+spectrometer:
+  n_channels: 4096          # 要確認(SAM45 を想定)
+  channel_width_mhz: 0.48828125
+  center_freq_ghz: 150.0
+
+modulation:
+  pattern: zigzag
+  dt_s: 0.1
+  half_width_ch: 150        # sweep で上書きする
+  zigzag_step_ch: 10        # 要確認(仮の値)
+  cycle_jitter: true        # 周期ごとに ±floor(step/2) ch のオフセット
+
+observation:
+  duration_s: 60.0          # 要確認(仮の値)
+
+noise:
+  thermal:
+    enabled: true
+    tsys_k: 200.0
+  atmosphere:
+    enabled: true
+    model: colored          # colored / random_walk / laminar / external
+    alpha: 1.5              # 要確認
+    rms_k: 1.0              # 要確認(仮の値)
+    offset_k: 50.0          # 要確認(仮の値)
+    slope_frac: 0.1         # 要確認(仮の値)
+    external_path: null
+  instrument:
+    enabled: false
+    alpha: 1.0
+    rms_k: 0.1              # 要確認(仮の値)
+
+removal:
+  method: iterative_pca     # sweep で上書きする
+  n_components: 3           # 仮の値
+  mean_mode: none
+  max_iter: 20
+  tol: 0.005
+  cutoff_sigma: 5.0
+
+evaluation:
+  line_free_n_fwhm: 2.0

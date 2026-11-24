@@ -1,0 +1,84 @@
+# 段階 2-B「1 ビーム OTF + FMLO 空間スキャン」の設定(run_step2_scan.py)
+# 「要確認」は根拠を確認できていない仮の値(README の一覧を参照)。
+
+seed: 20261005
+
+source:
+  sigma_arcsec: 50.0        # 天体の空間サイズ(σ)[arcsec]
+  line_fwhm_kms: 50.0
+  center_freq_ghz: 150.0
+  peak_k: 3.0               # 要確認(仮の値。1 パス・1 画素の雑音 約 0.2 K に対して十分な S/N にした)
+  center_ra_arcsec: 0.0
+  center_dec_arcsec: 0.0
+
+cube:
+  half_extent_arcsec: 240.0 # スキャン領域(±200)より広く取る。グリッディングで領域外を参照しないように
+  pixel_arcsec: 4.0         # ビーム FWHM(12")を 3 画素で表す(畳み込みの離散化誤差を抑える)
+  margin_ch: 20
+
+pointing:                   # 段階 2-B では使わない(scan.center_* を使う)
+  ra_arcsec: null
+  dec_arcsec: null
+
+spectrometer:
+  n_channels: 1024          # 要確認。計算量を抑えるため SAM45 の 4096 ch より狭い帯域(500 MHz)にしている
+  channel_width_mhz: 0.48828125
+  center_freq_ghz: 150.0
+
+modulation:
+  pattern: zigzag
+  dt_s: 0.1                 # = OTF のサンプリング間隔(10 Hz)
+  half_width_ch: 150        # 要確認(仮の値)
+  zigzag_step_ch: 10        # 要確認(仮の値)
+  cycle_jitter: true
+
+observation:
+  duration_s: 60.0          # scan.mode = single_point のときだけ使う
+
+noise:
+  thermal:
+    enabled: true
+    tsys_k: 200.0
+  atmosphere:
+    enabled: true
+    model: colored
+    alpha: 1.5              # 要確認
+    rms_k: 1.0              # 要確認(仮の値)
+    offset_k: 50.0          # 要確認(仮の値)
+    slope_frac: 0.1         # 要確認(仮の値)
+    external_path: null
+  instrument:
+    enabled: false
+    alpha: 1.0
+    rms_k: 0.1
+
+telescope:
+  beam_convolve: true
+  beam_fwhm_arcsec: 12.0    # 要確認(野辺山 45m・150 GHz で 1.2 λ/D ≈ 11")
+
+scan:
+  mode: basket_weave        # single_point / x_scan / y_scan / basket_weave
+  map_size_arcsec: 400.0
+  scan_speed_arcsec_s: 20.0 # 1 サンプル 2"(要確認)
+  row_spacing_arcsec: 10.0  # 要確認(ナイキスト間隔 約 5" より粗い)
+  center_ra_arcsec: 0.0
+  center_dec_arcsec: 0.0
+
+mapping:
+  grid_pixel_arcsec: 10.0
+  kernel: gaussian
+  kernel_fwhm_arcsec: 15.0
+  kernel_support_fwhm: 1.5
+  basket_weave_method: weighted_mean   # weighted_mean / fourier
+
+removal:
+  method: iterative_pca     # simple_pca / iterative_pca
+  n_components: 2           # 大気モデル(平坦 × 時間変動 + 変調で動く傾き)のランク。3 だと輝線の損失が増える(README)
+  mean_mode: none
+  max_iter: 20
+  tol: 0.005
+  cutoff_sigma: 3.0         # スキャンは 1 ボクセルの S/N が低いので 5 より下げた(README の検討)
+  model_smooth_ch: 25       # 判定の前に周波数方向に平滑化する幅 [ch]。輝線 FWHM(51 ch)の約半分 要確認
+
+evaluation:
+  line_free_n_fwhm: 2.0

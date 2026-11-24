@@ -342,6 +342,309 @@ T^ast の最大値が再現側で低いのは、上記の輝線位置のずれ�
 
 ---
 
+## 外部入力キューブの固定点模擬観測(試作)
+
+RA 方向 × Dec 方向 × 周波数の天球キューブを外部から与え、1 ビーム・固定点で模擬観測する。
+キューブの生成と観測処理を分離してあり、内部生成のガウシアンキューブも外部入力キューブも
+同じ `fmlo_sim.observation.observe()` を通る(`pipeline.simulate()` はその互換ラッパー)。
+
+天球キューブ(RA × Dec × 周波数)と、固定点で生成する観測時系列(時間 × 分光器チャンネル)は
+別のデータである。
+
+### 実行方法
+
+生成(A)と解析(B)は別々に実行できる。既存の一括実行(`run_step1.py`、`run_fig6.py`)もそのまま使える。
+
+```bash
+# A. キューブ + 観測設定 → 模擬観測データを保存(解析はしない)
+python run_observe_cube.py --cube outputs/step1/cube.npz \
+    --set pointing.ra_arcsec=0 --set pointing.dec_arcsec=0 \
+    --out outputs/observe_demo/observation.npz
+
+# B. 保存した観測データ → 解析・評価
+python run_analyze_observation.py --obs outputs/observe_demo/observation.npz \
+    --outdir outputs/observe_demo/analysis --line-from-source --two-step
+```
+
+- 入力キューブは `cube.save_cube` の形式(`run_step1.py` が出力する `cube.npz` と同じ)。
+  自作のキューブは `cube.save_cube(path, cube, ra, dec, freq)` で保存できる。
+- 観測設定は既存の YAML と同じ書式。使うのは `seed` / `pointing` / `spectrometer` / `modulation` /
+  `observation` / `noise` で、`source` / `cube` / `removal` / `evaluation` は置いてあっても A では使わない
+  (使わなかったセクションは出力に記録する)。`pointing` は数値で指定する(`null` はエラー)。
+- `--internal` を付けると、設定からガウシアンキューブを内部生成して同じ形式で保存する。
+- B の解析条件は設定 YAML の `removal` / `evaluation` から読む。評価に使う輝線領域は
+  `--line-from-source`(キューブに記録されたガウシアン天体の生成条件を使う)か
+  `--line-window-ghz LO HI --ref-freq-ghz F`(周波数窓を明示)で与える。
+  どちらも指定しなければ、輝線領域に依る評価値は「未計算」と理由を記録し、全域の残差だけを出す。
+- 既存の出力ファイルは上書きしない(`--overwrite` を付けた場合だけ上書き)。
+
+### 対応する入力と、エラーになる条件
+
+| 項目 | 対応する条件 | 対応外(エラー) |
+|---|---|---|
+| 値 | 単位 K、有限値の実数配列 | NaN / inf、マスク付き配列、複素数 |
+| 軸順序 | `cube[i_ra, i_dec, i_freq]` | それ以外(軸の長さと配列の形が合わない場合を含む) |
+| 空間軸 | 角度オフセット [arcsec]、昇順・等間隔 | 降順、不等間隔、FITS / WCS |
+| 周波数軸 | [GHz]、昇順・等間隔、チャンネル幅が分光器と同じで、分光器のチャンネルに重なる | 降順、不等間隔、幅の不一致、半端なずれ |
+| 周波数範囲 | 変調後の全観測窓がキューブの範囲に収まる | 1 ch でも不足する場合(外挿・循環シフト・ゼロ埋めはしない) |
+| 指向位置 | 端の画素中心 ± 半画素まで。最近傍画素を使う | マップ外(端の画素へ丸めない) |
+
+- 周波数軸はキューブのものをそのまま使い、作り直さない。
+- 等間隔・格子の一致の判定は、間隔の 1e-6 倍まで。float64 の周波数軸の丸め誤差(約 6e-11 ch)は通り、
+  float32 の周波数軸(約 0.03 ch の誤差)は通らない。
+- 2 つの画素のちょうど中間を指した場合は、番号の小さい画素になる(既存の `extract_spectrum` の仕様)。
+- ビーム畳み込み、空間補間、スキャン、マルチビームには対応していない。
+
+### 保存される内容
+
+`observation.npz`(A の出力)。浮動小数の配列はすべて float64 のまま保存する(丸めなし)。
+このため再読込した配列は保存前とビット単位で一致し、再読込後の解析結果も直接解析した結果と一致する
+(テストでは厳密一致で比べている)。既定設定(600 × 4096)で約 80 MB になる。
+
+| 配列 | 内容 |
+|---|---|
+| `observed` | 合成した観測時系列 [K] (時間 × チャンネル) |
+| `signal_tod` | 天体信号のみの観測時系列 [K](正解情報) |
+| `noise_thermal`, `noise_atmosphere` | 各雑音成分 [K](正解情報。有効にした成分だけ) |
+| `truth_k` | 観測した画素の正解スペクトル [K](キューブの周波数軸上) |
+| `time_s`, `shifts_ch`, `window_start_index` | 時刻 [s]、シフト量 [ch]、各時刻の窓の先頭インデックス |
+| `freq_wide_ghz`, `cube_ra_arcsec`, `cube_dec_arcsec` | キューブの座標軸 |
+| `meta`(JSON) | 単位・軸の意味・周波数対応、キューブの識別情報(パス・SHA-256・形・型)、指向位置と画素、使った設定と seed、コードのコミットと変更状態、実行環境 |
+
+時刻 t・チャンネル c の空の周波数は `freq_wide_ghz[window_start_index[t] + c]`。
+取得できなかった情報(git が使えない場合など)は `null` と理由を記録する。
+
+`analysis.npz` と `metrics.json`(B の出力)には、復元スペクトル・ヒット数、解析条件、評価結果、
+観測データの識別情報(パス・SHA-256)を保存する。
+
+正解情報(`truth_k`、`signal_tod`、`noise_*`)は観測データと同じファイルに入っているが、
+`obsio.load_observation()` は観測データと正解情報を別々のオブジェクトで返し、
+推定(`analysis.analyze()`)には観測データだけを渡す。正解を参照するのは評価(`analysis.evaluate()`)だけである。
+
+### 既存の 3 経路との関係
+
+設定も解析仕様も異なるので、統合はしていない。
+
+| 経路 | 入力 | 解析 |
+|---|---|---|
+| `run_step1.py` | 内部生成キューブ(`config/default.yaml`) | PCA 除去 → 復調(平均の扱い 3 通り) |
+| `run_fig6.py` | 内部生成キューブ(`config/fig6_taniguchi2020.yaml`、150 GHz 想定) | MAD による雑音推定 + 両側 cutoff の 2 回推定 |
+| `run_taniguchi2020_fig6.py` | 論文図から読み取った無次元の模擬データ | 論文・FMFlow に合わせた PCA(平均を戻す)、片側 cutoff、反復ごとの成分数 |
+| `run_observe_cube.py` + `run_analyze_observation.py` | 外部入力キューブ | 上 2 つと同じ処理(`--two-step` で 2 回推定) |
+
+論文 Fig. 6 再現は独立した基準事例として残してある。再現モデルの強度は図の無次元単位
+(E^nc の標準偏差がほぼ 1)であって K ではなく、図への当てはめ値(成分数 [4, 1]、雑音 1.06 など)は
+汎用の観測処理では使っていない。論文図との既知の不一致も解消していない。
+
+### 検証
+
+`tests/test_observe_cube.py`(外部キューブ)と `tests/test_regression_baselines.py`(既存 3 経路の基準値)で確認している。
+
+- 内部生成キューブを直接観測した結果と、保存・再読込して観測した結果が一致する(厳密一致)。
+- 位置ごとに異なるスペクトルを持つ非ガウシアンの小さなキューブで、指定した画素のスペクトルが観測される。
+- 雑音なし・除去なしでは、観測された周波数の復元値が入力に一致し、未観測の周波数は NaN(ヒット数 0)になる。
+  float32 のキューブは厳密一致、float64 のキューブは相対誤差 `n_time × 2.2e-16` 以内
+  (同じ値を `n_time` 回足して割る計算の丸め)。
+- 雑音なし / 熱雑音のみ / 大気のみ / 両方で、成分の和が観測時系列に厳密に一致する。
+- 保存 → 再読込 → 解析の結果が、直接解析した結果と一致する(NaN の位置・ヒット数・軸を含む)。
+- 形の不一致、非対応の軸、非有限値、マップ外、周波数帯域不足がエラーになる。
+- 入力キューブと観測時系列が変更されない。正解情報を壊しても推定結果が変わらない。
+- 既存 3 経路の基準値(コミット 91c0c9c で採取)が rtol 1e-9 で再現する。
+
+テストが通ることは「変更前と同じ結果が出る」「入出力が整合している」ことの確認であり、
+モデルや解析が研究上正しいことの保証ではない。
+
+### 互換性
+
+- `pipeline.simulate()`、`pipeline.reduce()`、`evaluation.evaluate()` の引数と戻り値は変わらない。
+- 指向位置がマップ外のとき、以前は端の画素に丸められていたが、エラーになる(`run_step1.py` も同じ)。
+- `evaluation.evaluate()` は、輝線のない領域が 1 チャンネルも無い・正解の積分強度が 0 などで
+  評価値が定義できない場合に `None` を返す(以前は NaN または例外)。
+
+## 段階2:雑音モデルの拡張・反復 PCA・1 ビーム OTF スキャン
+
+段階1のモジュール(`fmlo_sim/`)を拡張し、次の3つを追加した。追加した設定項目はすべて既定値を持ち、
+既定値では段階1と同じ結果になる(`tests/test_regression_baselines.py` で確認)。
+
+| 内容 | 実行スクリプト | 設定 | 主なモジュール |
+|---|---|---|---|
+| 雑音モデルの拡張と PSD 評価 | `run_step1.py`(図 11 を追加) | `config/default.yaml` | `noise.py`、`evaluation.py` |
+| 段階 2-A:反復 PCA と輝線幅スイープ | `run_step2_sweep.py` | `config/step2_sweep.yaml` | `removal.py`、`modulation.py`、`pipeline.py` |
+| 段階 2-B:1 ビーム OTF + FMLO スキャン | `run_step2_scan.py` | `config/step2_scan.yaml` | `scan.py`、`mapping.py`、`cube.py` |
+
+```bash
+cd step1_single_point
+python run_step2_sweep.py                       # outputs/step2_sweep/
+python run_step2_scan.py                        # outputs/step2_scan/(数分かかる)
+python run_step1.py --set removal.method=iterative_pca --set noise.atmosphere.offset_k=50
+pytest tests/test_step2.py
+```
+
+`--set` では、YAML に書かれていない新しいキー(`modulation.cycle_jitter` など)も上書きできる。
+型定義にないキーは従来どおりエラーになる。
+
+### 追加した設定項目
+
+| パラメータ | 意味 | 既定値 | 根拠 |
+|---|---|---|---|
+| `noise.atmosphere.model` | `laminar` / `colored`(= `turbulent`)/ `random_walk` / `external` | laminar | — |
+| `noise.atmosphere.external_path` | `external` のときの配列ファイル(下記) | null | — |
+| `noise.instrument.enabled` / `alpha` / `rms_k` | 装置由来の 1/f^α 雑音 | false / 1.0 / 0.1 K | **要確認**(仮の値) |
+| `modulation.cycle_jitter` | zigzag の 1 周期ごとに ±floor(step/2) ch のオフセットを足す | false | — |
+| `removal.method` | `simple_pca`(1 回)/ `iterative_pca`(反復) | simple_pca | — |
+| `removal.max_iter` / `tol` | 反復の上限 / 収束判定 | 20 / 0.005 | 指示書の値 |
+| `removal.cutoff_sigma` | 輝線モデルに残す S/N の閾値(0 なら全部) | 5.0 | 論文 §4.3 の θ_cutoff |
+| `removal.model_smooth_ch` | スキャンの輝線モデルで、判定の前に周波数方向に平滑化する幅 | 1(なし) | 下記の検討による |
+| `telescope.beam_convolve` / `beam_fwhm_arcsec` | 正解キューブをガウシアンビームで空間方向に畳み込む | false / 12″ | **要確認**(45m・150 GHz で 1.2λ/D ≈ 11″) |
+| `scan.*` | スキャンの形・領域・速度・行間隔・中心 | single_point ほか | 下記 |
+| `mapping.*` | 出力グリッドの画素・カーネル・basket weave の方法 | 10″ / gaussian / 15″ / weighted_mean | 計算上の選択 |
+
+乱数生成器は `RNG_NAMES` の末尾に `instrument` を足した。`SeedSequence.spawn` の i 番目の子は総数に依らないので、
+既存の変調・熱雑音・大気の乱数列は変わらない(テストあり)。スキャンのパスごとの乱数は
+`spawn_rngs(seed, pass_index)` で別系列から作る。
+
+### マイルストーン1:雑音モデルと PSD 評価
+
+- **`random_walk`**:正規乱数の累積和。平均 0・標準偏差 `rms_k` に規格化(PSD はおおむね f^-2)。
+- **`external`**(GATO など外部シミュレータの出力):`.npy` または `.npz`(配列名 `atmosphere`)。形は次の2通りだけ受け付け、
+  それ以外はエラーにする(補間・切り詰めはしない)。
+  - `(n_time,)`:全チャンネル共通の時間変動 a(t)。`(offset_k + a(t)) × s(ν)` に使う
+  - `(n_time, n_wide)`:空の周波数ごとの大気の明るさ [K]。天体と同じ観測窓で切り出す(`offset_k` と `slope_frac` は使わない)。
+    `.npz` に `freq_ghz` があれば広い周波数グリッドと一致するか確かめる。スキャンでは `atmosphere_x_scan` のようにパス名付きの配列があればそれを使う
+- **装置雑音**:全チャンネル共通の 1/f^α 利得変動。チャンネル(IF)に固定されるので、窓で切り出さずにそのまま足す。
+- **PSD の評価**(`evaluation.psd_comparison`):輝線が一度も入らないチャンネルについて、除去前後の PSD を理論的な熱雑音レベル
+  2σ²Δt(σ = Tsys/√(Δν_ch Δt))と比べ、低周波域(既定 0.1 Hz 未満)の PSD / 熱雑音 の比を出す。
+  `run_step1.py` は `fig11_psd_vs_thermal.png` と `metrics.json` の `psd_excess_over_thermal` に出力する。
+
+既定設定(大気は層流、オフセット 0)での低周波域の比:除去前 68.5 → PCA 後 0.90(チャンネルごとの PSD の平均)。
+チャンネル平均した時系列(共通モード)の PSD は PCA 後に熱雑音レベルの 0.1 倍まで下がる。PCA の成分が共通モードの
+熱雑音まで取り除いているためで、相関雑音が残っていないことの確認にはなるが、白色レベルとの一致は期待できない。
+
+### マイルストーン2:反復 PCA と輝線幅スイープ(段階 2-A)
+
+**反復 PCA**(`removal.iterative_pca`、Taniguchi et al. 2020 §3.2 の反復):
+
+1. i = 1:C⁽¹⁾ = PCA(X)。X − C⁽¹⁾ を復調・時間平均し、σ-cutoff した輝線モデルを再変調して A⁽¹⁾ とする
+2. i > 1:C⁽ⁱ⁾ = PCA(X − A⁽ⁱ⁻¹⁾)、A⁽ⁱ⁾ = モデル(X − C⁽ⁱ⁾)
+3. ‖A⁽ⁱ⁾ − A⁽ⁱ⁻¹⁾‖_F / ‖A⁽ⁱ⁾‖_F < `tol` か `max_iter` で終了。復元には X − C(最終回)を使う
+
+モデルを作る部分は関数として渡すので、1 点観測(復調 → σ-cutoff → 再変調)とスキャン(グリッディング → σ-cutoff → 逆投影)で
+同じ反復を使っている。σ-cutoff は既存の `iterative.make_noise_free_model`(両側 |s| 判定、MAD による雑音推定)をそのまま使う。
+
+**注意**:輝線が 1 チャンネルも検出されないと A = 0 のまま 2 回目で「収束」と判定される。反復は何もしていないので、
+`final_model_norm_k`(最終回の ‖A‖_F)が 0 かどうかで見分けること。
+
+**復調の重みマスク**:`modulation.demodulate_tod()` は、空の周波数に戻した時系列 (n_time, n_wide)(観測していない周波数は NaN)と
+有効サンプルの重みマスク W^NaN(1 / 0)を返す。重み付き時間平均は既存の `demodulate()` と一致する(テストあり)。
+
+**cycle jitter**:zigzag の最小周期ごとに [−floor(step/2), +floor(step/2)] の整数オフセットを足す。周波数グリッドはその分だけ広げる
+(`ModulationConfig.max_abs_shift_ch`)。random パターンとの組み合わせはエラー。
+
+**スイープの結果**(`config/step2_sweep.yaml`:大気 colored α = 1.5・オフセット 50 K、K = 3、mean_mode none、cycle jitter あり、
+seed = 20261005。全条件で熱雑音・大気の乱数列は同じ):
+
+| FWHM [km/s] | 半幅 [ch] | FWHM / 変調全幅 | 方法 | 積分強度比 | ピーク比 | 輝線なし領域の残差 RMS [K] | 反復回数 |
+|---|---|---|---|---|---|---|---|
+| 50 | 300 | 0.085 | simple_pca | 0.29 | 0.78 | 0.041 | 1 |
+| 50 | 300 | 0.085 | iterative_pca | 0.98 | 1.01 | 0.037 | 5 |
+| 50 | 150 | 0.17 | simple_pca | −0.03 | 0.51 | 0.037 | 1 |
+| 50 | 150 | 0.17 | iterative_pca | 0.94 | 0.97 | 0.037 | 7 |
+| 100 | 300 | 0.17 | iterative_pca | 0.93 | 1.00 | 0.037 | 9 |
+| 100 | 150 | 0.34 | iterative_pca | 0.88 | 0.94 | 0.037 | 19 |
+| 200 | 300 | 0.34 | iterative_pca | 0.35 | 0.58 | 0.036 | 20(未収束) |
+| 200 | 150 | 0.68 | iterative_pca | 0.003 | 0.03 | 0.037 | 2(A = 0) |
+
+(simple_pca は全条件で積分強度比 0.3 以下。全行は `outputs/step2_sweep/sweep_metrics.csv`。熱雑音だけの期待 RMS は 0.037 K)
+
+- オフセット 50 K・K = 3 では、simple_pca は輝線をほぼ消す(段階1の「オフセットと平均モード」の節と同じ理由)。
+- iterative_pca は FWHM / 変調全幅 ≲ 0.2 で 9 割以上を戻す。比が 0.35 付近から反復が遅くなり(20 回で未収束)、
+  0.68(輝線幅 205 ch > 変調全幅 300 ch)では 1 回目の PCA が輝線をほぼ吸い、検出できる輝線が残らないので回復しない。
+- 輝線なし領域の残差 RMS は、どの条件でも熱雑音の水準(0.037 K)とほとんど変わらない。**残差 RMS だけでは輝線の損失は分からない**。
+
+### マイルストーン3:1 ビーム OTF + FMLO スキャン(段階 2-B)
+
+**処理の流れ**(`run_step2_scan.py`):
+
+| 手順 | 内容 | 関数 |
+|---|---|---|
+| 1 | 正解キューブを作り、ガウシアンビームで空間方向に畳み込む(面積 1 に規格化、マップの外は 0 K) | `cube.convolve_beam` |
+| 2 | スキャン軌跡 (RA(t), Dec(t)) を Δt ごとに作る | `scan.make_passes` |
+| 3 | 各時刻の位置でキューブをバイリニア補間し、その時刻のシフト量の窓を切り出す(np.roll なし) | `scan.observe_pass` |
+| 4 | 雑音を足す(段階1と同じ関数。パスごとに独立な乱数) | `noise.make_noise_components` |
+| 5 | 雑音除去(simple_pca / iterative_pca)。パスごとに行う | `mapping.reduce_passes` |
+| 6 | 復調し、ガウシアンカーネルの重み付き平均で出力キューブ (RA × Dec × 周波数) にグリッディング | `mapping.grid_tod` |
+| 7 | x_scan と y_scan を basket weave で統合 | `mapping.combine_weighted_mean` / `combine_fourier` |
+| 8 | 評価・図 | `evaluation.evaluate_scan_cube` |
+
+- **スキャンの形**:`single_point` / `x_scan`(RA 方向に往復し、行ごとに Dec を `row_spacing` 進める)/ `y_scan` / `basket_weave`(x と y の2パス)。
+  1 行のサンプル数は round(L / (v Δt)) + 1。**行の折り返しは瞬時**(加減速・ランプ区間・OFF 点なし)で、行のあいだも連続にサンプリングする。
+- **グリッディング**:T(p, ν) = Σ_t w(p,t) W(t,ν) d(t,ν) / Σ_t w(p,t) W(t,ν)。w はカーネル exp(−r²/2σ²)(`kernel_support_fwhm` × FWHM で打ち切り)、
+  W は復調の重みマスク。分子と分母を別々に持つので、重み付き平均の basket weave は分子・分母の和になる。
+- **逆投影**:キューブを軌跡に沿ってバイリニア補間し、各時刻の窓を切り出す(反復 PCA の A⁽ⁱ⁾)。
+- **スキャンの σ-cutoff**:1 サンプルの雑音 σ_t を X − C の MAD から見積もり、ボクセルの雑音を σ_t √(Σw²) / Σw とする。
+- **フーリエ空間の basket weave**(`fourier`):x_scan の走査方向の雑音(行ごとのオフセットなど)は k_RA ≈ 0 に集まるので、
+  w_x = k_RA² / |k|²、w_y = k_Dec² / |k|² で足す(w_x + w_y = 1 なので共通の構造は保たれる)。マップを周期的とみなすので端で歪みうる。
+- **評価の基準**:正解キューブそのものではなく、**天体信号だけの時系列を同じ手順でグリッディングしたキューブ**(reference)と比べる。
+  グリッディングの平滑化(ビーム ⊗ カーネル)は基準にも同じだけ入るので、残差は雑音と雑音除去による誤差だけになる。
+  正解(ビーム畳み込み済み)を出力グリッドに補間したもの(truth)との比較も併記する。評価はスキャン領域の内側の画素、
+  全サンプルで観測された周波数だけで行う。
+
+**出力**(`outputs/step2_scan/`):
+
+| ファイル | 内容 |
+|---|---|
+| `fig21_scan_trajectory.png` | スキャン軌跡(正解の積分強度マップに重ねる)と時間 vs 位置 |
+| `fig22_scan_timestreams.png` | x_scan の中間時系列:変調後の天体信号 / 観測データ / 除去後 / 復調後(空の周波数) |
+| `fig23_scan_maps.png` | 積分強度マップ:基準 / x_scan / y_scan / basket_weave と、基準との残差 |
+| `fig24_scan_center_spectrum.png` | 天体中心の画素の復元スペクトルと正解・基準 |
+| `fig25_psd_<パス>.png` | 除去前後の PSD と熱雑音レベル |
+| `metrics_scan.json` / `metrics_scan.csv` | キューブの RMSE、ボクセル・積分強度のピーク比、ピーク位置・重心の誤差、総フラックスの復元率など |
+| `cubes_scan.npz` | 再構成キューブ・基準キューブ・正解(出力グリッド上)と軸 |
+
+**スキャンの結果と、輝線モデルの作り方の検討**(`config/step2_scan.yaml`、400″ 四方、20″/s、行間隔 10″、1 パス 8241 サンプル = 824 s、
+大気 colored α = 1.5・オフセット 50 K、天体 σ = 50″・ピーク 3 K、分光器 1024 ch):
+
+採用した設定(K = 2、iterative_pca、`cutoff_sigma` = 3、`model_smooth_ch` = 25)と simple_pca の比較:
+
+| 方法 | マップ | キューブ RMSE [K] | ボクセルのピーク比 | 積分強度ピーク比 | 積分強度マップの残差 RMS [K km/s] | 総フラックス復元率 | 重心の誤差 ["] |
+|---|---|---|---|---|---|---|---|
+| iterative_pca | x_scan | 0.189 | 0.96 | 0.95 | 2.83 | 0.89 | 0.3 |
+| iterative_pca | y_scan | 0.189 | 1.06 | 0.97 | 2.77 | 0.91 | 1.2 |
+| iterative_pca | basket_weave(重み付き平均) | **0.133** | 1.01 | 0.96 | **2.26** | **0.90** | 0.1 |
+| iterative_pca | basket_weave(フーリエ) | 0.161 | 1.06 | 0.97 | 2.53 | 0.90 | 0.7 |
+| simple_pca | basket_weave(重み付き平均) | 0.150 | 0.80 | 0.53 | 21.7 | −0.06 | 2.9 |
+
+(基準キューブとの比較。総フラックスはグリッディングでほぼ保存されるので、正解との比も同じ値になる。
+ピーク位置はどの場合も 0″(simple_pca だけ 10–20″)。全項目は `outputs/step2_scan/metrics_scan.json`)
+
+- basket weave(重み付き平均)はサンプル数が倍になるので、キューブの RMSE が 1/√2 倍(0.189 → 0.133 K)になる。
+- フーリエ空間の重み付けは、この条件ではむしろ悪い。PCA の後には走査方向のストライプがほとんど残っておらず、
+  重み付けが雑音の平均化を損ねるだけになるため。ストライプが残る条件(PCA なし・装置雑音ありなど)での比較は未実施。
+- 除去前後の PSD(x_scan、輝線の入らないチャンネル):低周波域(< 0.1 Hz)の PSD / 熱雑音 は除去前 58 → iterative_pca 後 1.00。
+
+輝線モデルの作り方による違い(basket weave、K = 2):
+
+| `cutoff_sigma` | `model_smooth_ch` | 総フラックス復元率 | 積分強度マップの残差 RMS [K km/s] | 反復回数(x, y) |
+|---|---|---|---|---|
+| —(simple_pca) | — | −0.06 | 21.7 | 1 |
+| 5 | 1 | 0.46 | 9.10 | 9, 9 |
+| 3 | 1 | 0.67 | 5.56 | 8, 8 |
+| 3 | 9 | 0.86 | 2.71 | 8, 8 |
+| 5 | 25 | 0.84 | 2.93 | 7, 7 |
+| 3 | 25 | **0.90** | **2.26** | 10, 9 |
+
+- 1 点観測と違い、スキャンでは 1 ボクセルの S/N が低い(1 パス・1 画素の雑音 約 0.19 K)。σ-cutoff をボクセルごとに 5σ で行うと、
+  広がった天体の裾が輝線モデルから落ちる。オフセットのある大気では第1主成分がほぼ時間平均スペクトルになるので、
+  モデルに入らなかった輝線の**時間平均**(マップ全体に薄く広がった成分)は PCA に吸われ続け、反復しても戻らない。
+- そこで判定の前に周波数方向に平滑化する `removal.model_smooth_ch` を加えた(既定 1 = なし。1 点観測には影響しない)。
+- 成分数 K は、この大気モデル(平坦 × 時間変動 + 変調で動く傾き)が実質ランク 2 なので 2 にした。K = 3 では 3 番目の成分が輝線を吸い、
+  200″ 四方の試行でフラックス復元率が 0.80 → 0.68 に下がった。
+
+**未実装・簡略化**:行の折り返し(ランプ区間)と OFF 点、仰角・位置に依存する大気、x と y を同時に使った反復の評価
+(`--joint-basket-weave` で実行はできるが、上の表には含めていない)、全帯域 4096 ch での実行(計算量のため 1024 ch にしている)。
+
+---
+
 ## 段階①の成果・相談事項・Issue #5 更新案 (段階②への引き継ぎ)
 
 ### 1. 段階①で再現・確認できた性質と数値

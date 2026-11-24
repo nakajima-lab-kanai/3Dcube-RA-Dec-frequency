@@ -434,3 +434,205 @@ def plot_fig6_restored_spectra(
         fontsize=12,
     )
     _save(fig, path)
+
+
+# ---------------------------------------------------------------------------
+# PSD と理論熱雑音レベル(マイルストーン 1)
+# ---------------------------------------------------------------------------
+
+SERIES_COLORS = [INK_SECONDARY, BLUE, ORANGE, AQUA, "#7b5ea7", "#b8860b"]
+
+
+def plot_psd_vs_thermal(path, cmp, title_prefix=""):
+    """除去前後の PSD と、理論的な熱雑音(白色)レベル
+
+    cmp : evaluation.psd_comparison の戻り値。灰色の帯が「低周波域」(low_freq_hz 未満)
+    """
+    freqs = cmp["freqs_hz"]
+    titles = ["Mean of per-channel PSDs (line-free channels)",
+              "PSD of the channel-averaged time series (common mode)"]
+    whites = [cmp["white_per_channel"], cmp["white_common"]]
+    keys = ["low_freq_per_channel", "low_freq_common"]
+    f_low = next(iter(cmp["excess"].values()))["low_freq_hz"]
+    fig, axs = plt.subplots(1, 2, figsize=(14, 4.8))
+    for i, ax in enumerate(axs):
+        for (label, psd), color in zip(cmp["psd"].items(), SERIES_COLORS):
+            ratio = cmp["excess"][label][keys[i]]
+            tag = f" (low-f / thermal = {ratio:.3g})" if ratio is not None else ""
+            ax.loglog(freqs, np.maximum(psd[i], 1e-300), color=color, linewidth=1.1, label=f"{label}{tag}")
+        ax.axhline(whites[i], color=INK, linestyle="--", linewidth=1.0, label="Expected thermal noise (white)")
+        ax.axvspan(freqs[0], f_low, color=GRID, alpha=0.5, lw=0)
+        ax.set_title(f"{title_prefix}{titles[i]}")
+        ax.set_xlabel("Temporal frequency (Hz)")
+        ax.set_ylabel("Power spectral density (K^2/Hz)")
+        ax.grid(True, which="major")
+        ax.legend(loc="best", fontsize=8)
+    _save(fig, path)
+
+
+# ---------------------------------------------------------------------------
+# 輝線幅スイープ(マイルストーン 2)
+# ---------------------------------------------------------------------------
+
+def plot_sweep(path, rows, expected_thermal_rms_k=None):
+    """輝線幅 / 変調全幅 vs 積分強度比・ピーク比・残差 RMS
+
+    rows : run_step2_sweep の各条件の辞書(line_fwhm_over_mod_width, half_width_ch, method, ...)
+    """
+    methods = sorted({r["method"] for r in rows})
+    widths = sorted({r["half_width_ch"] for r in rows})
+    method_color = dict(zip(methods, [BLUE, ORANGE, AQUA, INK_SECONDARY]))
+    markers = ["o", "s", "^", "D", "v", "P"]
+    panels = [("integrated_ratio", "Integrated intensity ratio (restored / true)", 1.0),
+              ("peak_ratio", "Peak ratio (restored / true)", 1.0),
+              ("line_free_residual_rms_k", "Line-free residual RMS (K)", expected_thermal_rms_k)]
+    fig, axs = plt.subplots(1, 3, figsize=(18, 5.0))
+    for ax, (key, ylabel, ref) in zip(axs, panels):
+        for m in methods:
+            for w, mk in zip(widths, markers):
+                sel = sorted([r for r in rows if r["method"] == m and r["half_width_ch"] == w],
+                             key=lambda r: r["line_fwhm_over_mod_width"])
+                if not sel:
+                    continue
+                x = [r["line_fwhm_over_mod_width"] for r in sel]
+                y = [np.nan if r[key] is None else r[key] for r in sel]
+                ax.plot(x, y, color=method_color[m], marker=mk, linewidth=1.2,
+                        linestyle="-" if m == "iterative_pca" else "--", label=f"{m}, half width {w} ch")
+        if ref is not None:
+            label = "Expected thermal RMS" if key == "line_free_residual_rms_k" else None
+            ax.axhline(ref, color=INK, linestyle=":" if label else "-", linewidth=0.9, label=label)
+        ax.set_xscale("log")
+        ax.set_xlabel("Line FWHM / full modulation width (dimensionless)")
+        ax.set_ylabel(ylabel)
+        ax.grid(True, which="both")
+        ax.legend(loc="best", fontsize=8)
+    _save(fig, path)
+
+
+# ---------------------------------------------------------------------------
+# スキャン(マイルストーン 3)
+# ---------------------------------------------------------------------------
+
+def _map_extent(ra, dec):
+    h_ra = (ra[1] - ra[0]) / 2.0 if ra.size > 1 else 0.5
+    h_dec = (dec[1] - dec[0]) / 2.0 if dec.size > 1 else 0.5
+    return [ra[0] - h_ra, ra[-1] + h_ra, dec[0] - h_dec, dec[-1] + h_dec]
+
+
+def plot_scan_trajectory(path, passes, mom0_truth, ra_axis, dec_axis, beam_fwhm_arcsec=None):
+    """スキャン軌跡(正解の積分強度マップに重ねる)と、時間 vs 指向位置"""
+    n = len(passes)
+    fig, axs = plt.subplots(1, n + 1, figsize=(6.0 * (n + 1), 5.0), squeeze=False)
+    axs = axs[0]
+    colors = [BLUE, ORANGE]
+    for ax, p, c in zip(axs[:n], passes, colors):
+        im = ax.imshow(mom0_truth.T, origin="lower", cmap=CMAP_SEQ, extent=_map_extent(ra_axis, dec_axis))
+        ax.plot(p.ra_arcsec, p.dec_arcsec, color=c, linewidth=0.5, alpha=0.9)
+        ax.plot(p.ra_arcsec[0], p.dec_arcsec[0], marker="o", color=INK, linestyle="none", label="Start")
+        if beam_fwhm_arcsec:
+            th = np.linspace(0, 2 * np.pi, 100)
+            r = beam_fwhm_arcsec / 2.0
+            x0, y0 = ra_axis[0] + 3 * r, dec_axis[0] + 3 * r
+            ax.plot(x0 + r * np.cos(th), y0 + r * np.sin(th), color=INK, linewidth=1.0, label="Beam FWHM")
+        ax.set_title(f"{p.name}: trajectory ({p.n_time} samples)")
+        ax.set_xlabel("RA offset (arcsec)")
+        ax.set_ylabel("Dec offset (arcsec)")
+        ax.legend(loc="upper right", fontsize=8)
+        fig.colorbar(im, ax=ax, label="True integrated intensity (K km/s)")
+    ax = axs[n]
+    for p, c in zip(passes, colors):
+        ax.plot(p.time_s, p.ra_arcsec, color=c, linewidth=0.8, label=f"{p.name}: RA")
+        ax.plot(p.time_s, p.dec_arcsec, color=c, linewidth=0.8, linestyle=":", label=f"{p.name}: Dec")
+    ax.set_title("Pointing vs time")
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Offset (arcsec)")
+    ax.grid(True)
+    ax.legend(loc="best", fontsize=8)
+    _save(fig, path)
+
+
+def plot_scan_timestreams(path, obs, cleaned, demod, freq_wide_ghz, max_rows=2000):
+    """中間タイムストリーム:変調後の天体信号 / 観測データ / 除去後 / 復調後(空の周波数)
+
+    時間方向は max_rows 行を超えないよう等間隔に間引いて表示する(平均はしない)。
+    """
+    p = obs.scan_pass
+    step = max(1, int(np.ceil(p.n_time / max_rows)))
+    t = p.time_s[::step]
+    panels = [("Modulated source signal only", obs.signal_tod[::step], CMAP_SEQ, "seq"),
+              ("Observed data (signal + noise)", obs.observed[::step], CMAP_DIV, "div"),
+              ("After noise removal (X - C)", cleaned[::step], CMAP_DIV, "div")]
+    fig, axs = plt.subplots(1, 4, figsize=(24, 5.2))
+    for ax, (title, tod, cmap, kind) in zip(axs[:3], panels):
+        if kind == "seq":
+            vmin, vmax = 0.0, float(np.max(tod)) or 1.0
+        else:
+            vmin, vmax = _signed_limits(tod)
+        _tod_image(ax, tod, t, cmap, vmin, vmax, f"{p.name}: {title}", "Intensity (K)")
+    d = demod[::step]
+    vmin, vmax = _signed_limits(d[np.isfinite(d)])
+    dt = t[1] - t[0] if t.size > 1 else 1.0
+    im = axs[3].imshow(np.ma.masked_invalid(d), aspect="auto", origin="lower", cmap=CMAP_DIV, vmin=vmin,
+                       vmax=vmax, interpolation="nearest",
+                       extent=[freq_wide_ghz[0], freq_wide_ghz[-1], t[0], t[-1] + dt])
+    axs[3].set_title(f"{p.name}: demodulated (sky frequency, blank = not observed)")
+    axs[3].set_xlabel("Sky frequency (GHz)")
+    axs[3].set_ylabel("Time (s)")
+    fig.colorbar(im, ax=axs[3], label="Intensity (K)")
+    _save(fig, path)
+
+
+def plot_scan_maps(path, maps: dict, reference, ra_axis, dec_axis, metrics: dict = None):
+    """積分強度マップの並列比較(上段)と、基準マップとの残差(下段)
+
+    maps : {'x_scan': mom0, 'y_scan': mom0, 'basket_weave': mom0} [K km/s]
+    reference : 雑音なしの天体信号を同じ手順でグリッディングした積分強度マップ
+    """
+    names = list(maps)
+    n = len(names) + 1
+    fig, axs = plt.subplots(2, n, figsize=(5.0 * n, 9.4), squeeze=False)
+    ext = _map_extent(ra_axis, dec_axis)
+    vmax = float(np.nanmax(reference)) or 1.0
+    im = axs[0, 0].imshow(reference.T, origin="lower", cmap=CMAP_SEQ, vmin=0, vmax=vmax, extent=ext)
+    axs[0, 0].set_title("Reference (noise-free signal, same gridding)")
+    fig.colorbar(im, ax=axs[0, 0], label="Integrated intensity (K km/s)")
+    resid = {k: maps[k] - reference for k in names}
+    rmax = max([float(np.nanpercentile(np.abs(r), 99.5)) for r in resid.values()] + [1e-12])
+    for i, k in enumerate(names, start=1):
+        im = axs[0, i].imshow(maps[k].T, origin="lower", cmap=CMAP_SEQ, vmin=0, vmax=vmax, extent=ext)
+        axs[0, i].set_title(f"Restored: {k}")
+        fig.colorbar(im, ax=axs[0, i], label="Integrated intensity (K km/s)")
+        im = axs[1, i].imshow(resid[k].T, origin="lower", cmap=CMAP_DIV, vmin=-rmax, vmax=rmax, extent=ext)
+        tag = ""
+        if metrics and k in metrics and metrics[k].get("mom0_residual_rms_kkms") is not None:
+            tag = f"\nRMS {metrics[k]['mom0_residual_rms_kkms']:.3g} K km/s"
+        axs[1, i].set_title(f"Residual: {k} - reference{tag}")
+        fig.colorbar(im, ax=axs[1, i], label="Residual (K km/s)")
+    axs[1, 0].axis("off")
+    for ax in axs.ravel():
+        if ax.axison:
+            ax.set_xlabel("RA offset (arcsec)")
+            ax.set_ylabel("Dec offset (arcsec)")
+    _save(fig, path)
+
+
+def plot_scan_center_spectrum(path, freq_ghz, valid, truth, reference, restored: dict, zoom_ghz=None):
+    """天体中心の画素の復元スペクトルと正解スペクトル"""
+    colors = [BLUE, ORANGE, AQUA, INK_SECONDARY]
+    fig, axs = plt.subplots(2, 1, figsize=(11, 8))
+    f = freq_ghz[valid]
+    for ax in axs:
+        for (k, spec), c in zip(restored.items(), colors):
+            ax.plot(f, spec[valid], color=c, linewidth=0.9, label=f"Restored: {k}")
+        ax.plot(f, reference[valid], color=INK_SECONDARY, linewidth=1.2, linestyle="--",
+                label="Reference (noise-free signal, same gridding)")
+        ax.plot(f, truth[valid], color=INK, linewidth=1.5, label="Ground truth (beam-convolved)")
+        ax.set_xlabel("Sky frequency (GHz)")
+        ax.set_ylabel("Intensity (K)")
+        ax.grid(True)
+        ax.legend(loc="upper right", fontsize=8)
+    axs[0].set_title("Spectrum at the source-center pixel (frequencies observed in every sample)")
+    axs[1].set_title("Zoom on the line")
+    if zoom_ghz is not None:
+        axs[1].set_xlim(*zoom_ghz)
+    _save(fig, path)

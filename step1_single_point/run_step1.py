@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from fmlo_sim import cube as cube_mod
-from fmlo_sim import evaluation, pipeline, plotting
+from fmlo_sim import evaluation, noise, pipeline, plotting
 from fmlo_sim.config import MEAN_MODES, load_config, parse_set_args
 
 HERE = Path(__file__).resolve().parent
@@ -28,6 +28,9 @@ def run(cfg, outdir, make_plots=True, save_cube=True):
 
     sim = pipeline.simulate(cfg)
     results = pipeline.reduce_all_modes(sim)
+    if cfg.removal.method == "iterative_pca":
+        # 既定(simple_pca)では従来の 3 通りだけ。反復 PCA を選んだときだけ 1 行足す
+        results["iterative_pca"] = pipeline.reduce_iterative(sim)
     grid = sim.grid
 
     # 輝線が一度も入らないチャンネルで、時間方向のパワースペクトルを PCA 前後で比べる
@@ -41,6 +44,15 @@ def run(cfg, outdir, make_plots=True, save_cube=True):
     for mode in MEAN_MODES:
         psd[mode] = evaluation.time_power_spectrum(results[mode].pca.cleaned, dt, ch_mask)
 
+    # 除去前後の PSD を理論的な熱雑音(白色)レベルと比べる
+    sigma_t = noise.radiometer_sigma_k(cfg.noise.thermal.tsys_k, cfg.spectrometer.channel_width_mhz * 1e6,
+                                       dt) if cfg.noise.thermal.enabled else 0.0
+    tods = {"before": sim.observed, **{label: r.pca.cleaned for label, r in results.items()
+                                       if label != "no_pca" and label != "iterative_pca"}}
+    if "iterative_pca" in results:
+        tods["iterative_pca"] = results["iterative_pca"].iterative.cleaned[0]
+    psd_cmp = evaluation.psd_comparison(tods, dt, ch_mask, sigma_t)
+
     summary = {
         "config": cfg.to_dict(),
         "primary_mean_mode": cfg.removal.mean_mode,
@@ -51,6 +63,8 @@ def run(cfg, outdir, make_plots=True, save_cube=True):
                     "explained_ratio": [float(x) for x in r.pca.explained_ratio], **r.metrics}
             for label, r in results.items()
         },
+        "thermal_sigma_per_sample_k": float(sigma_t),
+        "psd_excess_over_thermal": psd_cmp["excess"],
     }
 
     if save_cube:
@@ -83,6 +97,7 @@ def run(cfg, outdir, make_plots=True, save_cube=True):
         plotting.plot_pca(outdir / "fig05_pca_removal.png", sim, primary)
         plotting.plot_restored(outdir / "fig06_restored_spectrum.png", sim, results)
         plotting.plot_power_spectra(outdir / "fig07_power_spectra.png", psd)
+        plotting.plot_psd_vs_thermal(outdir / "fig11_psd_vs_thermal.png", psd_cmp)
 
     return summary
 
